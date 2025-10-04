@@ -56,7 +56,7 @@
         }
     </style>
 </head>
-<body class="p-4 md:p-8 text-gray-200">
+<body class="p-4 md:p-8 text-gray-200" oncontextmenu="return false;">
 
     <div class="container mx-auto">
         <h1 class="text-4xl font-bold mb-8 text-green-400 border-b border-gray-700 pb-3">Technical Quiz Portal</h1>
@@ -65,13 +65,13 @@
         <div class="card p-6 rounded-lg mb-8">
             <h2 class="text-xl font-semibold mb-4 text-green-300">1. API Key Setup</h2>
             <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
-                <input type="text" id="userId" placeholder="Enter User ID (e.g., JaneDoe)" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                <button onclick="generateKey()" class="btn bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg">
-                    Get/Refresh API Key
+                <input type="text" id="userId" value="Auto-Generated User" disabled class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                <button onclick="generateKey()" class="btn bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg disabled:opacity-50" disabled>
+                    Auto-Authenticated
                 </button>
             </div>
             <div id="apiKeyDisplay" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm break-all">
-                API Key: <span id="apiKeyStatus" class="text-red-400">Not set. Please generate a key.</span>
+                API Key: <span id="apiKeyStatus" class="text-green-400">Loading Key...</span>
             </div>
             <div id="statusMessage" class="mt-3 text-sm text-red-400 hidden"></div>
         </div>
@@ -80,7 +80,7 @@
         <div class="card p-6 rounded-lg mb-8">
             <h2 class="text-xl font-semibold mb-4 text-green-300">2. Select Quiz</h2>
             <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 mb-4">
-                <select id="domainSelect" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                <select id="domainSelect" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" disabled>
                     <option value="">-- Select Domain --</option>
                     <!-- Options populated by JS -->
                 </select>
@@ -88,7 +88,7 @@
                     <option value="">-- Select Difficulty --</option>
                     <!-- Options populated by JS -->
                 </select>
-                <button onclick="loadQuestions()" id="loadQuestionsBtn" class="btn bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg disabled:opacity-50">
+                <button onclick="loadQuestions()" id="loadQuestionsBtn" class="btn bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg disabled:opacity-50" disabled>
                     Load Quiz
                 </button>
             </div>
@@ -131,7 +131,8 @@
         // Set the API URL to your live Render deployment
         const API_BASE_URL = 'https://fast-quiz-api.onrender.com';
         
-        let API_KEY = sessionStorage.getItem('quizApiKey') || '';
+        // --- Hardcoding the key is not strictly needed anymore, but for deployment safety ---
+        let API_KEY = ''; // We will generate a fresh key every time
         let currentDomains = {};
         let activeQuestions = [];
         let activeQuizType = "";
@@ -177,7 +178,7 @@
             if (requiresAuth && API_KEY) {
                 headers['X-API-Key'] = API_KEY;
             } else if (requiresAuth && !API_KEY) {
-                elements.statusMessage.textContent = "Error: API Key is missing. Please generate a key first.";
+                elements.statusMessage.textContent = "Error: API Key is missing. Trying to auto-authenticate...";
                 elements.statusMessage.classList.remove('hidden');
                 return null;
             }
@@ -190,10 +191,9 @@
                 const status = response.status;
                 
                 if (status === 401) {
-                    elements.statusMessage.textContent = `Authentication Error: Invalid or expired API Key. Please regenerate the key.`;
-                    API_KEY = ''; 
-                    sessionStorage.removeItem('quizApiKey');
-                    updateKeyDisplay();
+                    elements.statusMessage.textContent = `Authentication Error: Key failed validation. Trying to auto-generate a new key...`;
+                    // Automatically try to generate a new key on 401
+                    await generateKey(true);
                 } else if (status === 404) {
                      elements.statusMessage.textContent = `API Error (404): Resource not found for ${endpoint}.`;
                 } else {
@@ -209,49 +209,57 @@
             }
         }
 
-        function updateKeyDisplay() {
-            if (API_KEY) {
-                elements.apiKeyStatus.textContent = API_KEY;
+        function updateKeyDisplay(isGenerating = false) {
+            if (isGenerating) {
+                elements.apiKeyStatus.innerHTML = '<span class="pulse-animation">Generating Key...</span>';
+                elements.apiKeyStatus.classList.remove('text-green-400');
+                elements.apiKeyStatus.classList.add('text-red-400');
+            } else if (API_KEY) {
+                elements.apiKeyStatus.textContent = '✅ Authenticated';
                 elements.apiKeyStatus.classList.remove('text-red-400', 'pulse-animation');
                 elements.apiKeyStatus.classList.add('text-green-400');
+                // Enable controls
+                elements.domainSelect.disabled = false;
+                elements.loadQuestionsBtn.disabled = !(elements.domainSelect.value && elements.categorySelect.value);
             } else {
-                elements.apiKeyStatus.textContent = 'Not set. Please generate a key.';
+                elements.apiKeyStatus.textContent = '❌ Authentication Failed';
                 elements.apiKeyStatus.classList.add('text-red-400');
-                elements.apiKeyStatus.classList.remove('text-green-400');
+                elements.apiKeyStatus.classList.remove('text-green-400', 'pulse-animation');
             }
         }
 
         // --- Core Application Logic (Auth, Domains, Loading) ---
 
-        async function generateKey() {
-            elements.statusMessage.classList.add('hidden');
-            const user = elements.userId.value.trim();
-
-            if (!user) {
-                elements.statusMessage.textContent = "Please enter a User ID.";
-                elements.statusMessage.classList.remove('hidden');
-                return;
-            }
-
-            elements.apiKeyStatus.innerHTML = '<span class="pulse-animation">Generating...</span>';
-
+        /**
+         * Generates a new API key.
+         * @param {boolean} silent If true, suppresses success message.
+         */
+        async function generateKey(silent = false) {
+            const user = "AutoUser-" + Math.random().toString(36).substring(2, 8);
+            updateKeyDisplay(true);
+            
             const data = await fetchApi(`/generate-key/?user=${user}`, 'POST', null, false);
 
             if (data && data.api_key) {
                 API_KEY = data.api_key;
-                sessionStorage.setItem('quizApiKey', API_KEY);
                 updateKeyDisplay();
-                elements.statusMessage.textContent = `Success! API Key generated for user: ${data.user}.`;
-                elements.statusMessage.classList.remove('hidden', 'text-red-400');
-                elements.statusMessage.classList.add('text-green-400');
+                if (!silent) {
+                    elements.statusMessage.textContent = `Success! Session key generated automatically.`;
+                    elements.statusMessage.classList.remove('hidden', 'text-red-400');
+                    elements.statusMessage.classList.add('text-green-400');
+                }
+                // Once the key is generated, proceed to load domains
                 await loadDomains();
             } else {
-                elements.apiKeyStatus.innerHTML = 'Generation failed.';
+                updateKeyDisplay();
+                elements.statusMessage.textContent = `CRITICAL: Failed to auto-generate API key. Check API URL and service status.`;
+                elements.statusMessage.classList.remove('hidden', 'text-green-400');
+                elements.statusMessage.classList.add('text-red-400');
             }
         }
 
         async function loadDomains() {
-            elements.domainOverview.innerHTML = '<div class="flex space-x-2"><div class="skeleton-line w-1/3"></div><div class="skeleton-line w-1/4"></div></div>';
+            elements.domainOverview.innerHTML = '<p class="text-center"><span class="pulse-animation">Loading domains...</span></p>';
             elements.statusMessage.classList.add('hidden');
 
             const data = await fetchApi('/domains/');
@@ -261,7 +269,7 @@
                 populateDomainSelect(data);
                 displayDomainOverview(data);
             } else {
-                elements.domainOverview.textContent = "Failed to load domain overview. (Requires API Key)";
+                elements.domainOverview.textContent = "Failed to load domain overview. (Check Authentication)";
             }
         }
 
@@ -273,7 +281,6 @@
                 option.textContent = domain;
                 elements.domainSelect.appendChild(option);
             }
-            elements.domainSelect.disabled = false;
         }
 
         function displayDomainOverview(data) {
@@ -529,16 +536,8 @@
         // --- Initialization ---
 
         function init() {
-            // Check for existing API Key
-            if (API_KEY) {
-                updateKeyDisplay();
-                loadDomains();
-                elements.userId.value = "Session User"; // Placeholder to indicate key is set
-            } else {
-                // If no key exists, only update the display, wait for user to generate key
-                updateKeyDisplay();
-                loadDomains(); 
-            }
+            // Initiate the key generation process immediately
+            generateKey();
 
             // Event Listeners
             elements.domainSelect.addEventListener('change', handleDomainChange);
