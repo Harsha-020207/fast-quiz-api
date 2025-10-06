@@ -3,9 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Technical Quiz Portal</title>
+    <title>Skill Evaluation Tool (LLM Graded)</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Supabase Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- Load Chart.js for statistics graph -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {
@@ -13,7 +17,7 @@
             background-color: #0d1117; /* Dark background */
         }
         .container {
-            max-width: 1000px;
+            max-width: 1200px;
         }
         .card {
             background-color: #161b22; /* Slightly lighter card background */
@@ -26,26 +30,12 @@
         .btn:hover {
             transform: translateY(-1px);
         }
-        .mcq-answer-correct {
-            color: #38a169; /* Green text for correct answer */
-            font-weight: 600;
-        }
         .pulse-animation {
             animation: pulse 1s infinite;
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
-        }
-        .skeleton-line {
-            background-color: #30363d;
-            height: 1.5rem;
-            border-radius: 0.25rem;
-            animation: loading-pulse 1.5s infinite;
-        }
-        @keyframes loading-pulse {
-            0% { opacity: 0.6; }
-            50% { opacity: 1; }
             100% { opacity: 0.6; }
         }
         .result-correct {
@@ -54,31 +44,81 @@
         .result-incorrect {
             border-left: 4px solid #e53e3e;
         }
+        .active-mode-btn {
+            background-color: #10b981 !important; /* bg-green-500 */
+        }
+        /* Modal specific styling */
+        .auth-modal-content, .profile-modal-content, .admin-modal-content {
+            transform: scale(0.95);
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+        }
+        .auth-modal-open .auth-modal-content, .profile-modal-open .profile-modal-content, .admin-modal-open .admin-modal-content {
+            transform: scale(1);
+        }
+        .profile-picture {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background-color: #30363d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            color: #90cdf4; /* Blue tint */
+            cursor: pointer;
+            border: 2px solid #10b981;
+            transition: border-color 0.2s;
+            object-fit: cover;
+        }
+        .profile-picture:hover {
+            border-color: #38a169;
+        }
+        /* Password Toggle Styling */
+        .password-wrapper {
+            position: relative;
+        }
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #9ca3af; /* Default gray for dark theme */
+            transition: color 0.2s;
+        }
+        .password-toggle:hover {
+            color: #fff;
+        }
     </style>
 </head>
 <body class="p-4 md:p-8 text-gray-200" oncontextmenu="return false;">
 
-    <div class="container mx-auto">
-        <h1 class="text-4xl font-bold mb-8 text-green-400 border-b border-gray-700 pb-3">Technical Quiz Portal</h1>
+    <!-- 1. Floating Authentication/Profile Controls (Top Right) -->
+    <div id="auth-controls" class="fixed top-4 right-4 z-40 flex space-x-2 items-center">
+        <!-- Button shown when logged OUT -->
+        <button id="showAuthModalBtn" onclick="toggleAuthModal(true, 'signIn')" class="btn bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg shadow-lg">
+            Sign In / Register
+        </button>
 
-        <!-- API Key Management -->
-        <div class="card p-6 rounded-lg mb-8">
-            <h2 class="text-xl font-semibold mb-4 text-green-300">1. API Key Setup</h2>
-            <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
-                <input type="text" id="userId" value="Auto-Generated User" disabled class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                <button onclick="generateKey()" class="btn bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg disabled:opacity-50" disabled>
-                    Auto-Authenticated
-                </button>
-            </div>
-            <div id="apiKeyDisplay" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm break-all">
-                API Key: <span id="apiKeyStatus" class="text-green-400">Loading Key...</span>
-            </div>
-            <div id="statusMessage" class="mt-3 text-sm text-red-400 hidden"></div>
+        <!-- Admin Dashboard Button (Only visible for Admins) -->
+        <button id="showAdminModalBtn" onclick="toggleAdminModal(true)" class="btn bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-2 px-4 rounded-lg shadow-lg hidden">
+            Admin Dashboard
+        </button>
+
+        <!-- Profile Info / Logout shown when logged IN -->
+        <div id="userInfoHeader" class="flex items-center space-x-3 hidden p-1 bg-gray-800 rounded-full shadow-lg border border-gray-700">
+            <!-- Profile Icon/Picture -->
+            <div id="profileImageCircle" onclick="toggleProfileModal(true)" class="profile-picture w-10 h-10 text-xl flex-shrink-0">P</div>
         </div>
+    </div>
 
-        <!-- Domain Selection and Fetch -->
+
+    <div class="container mx-auto">
+        <h1 class="text-4xl font-bold mb-8 text-green-400 border-b border-gray-700 pb-3">Skill Evaluation Tool (LLM Graded)</h1>
+
+        <!-- 2. Select Quiz Parameters -->
         <div class="card p-6 rounded-lg mb-8">
-            <h2 class="text-xl font-semibold mb-4 text-green-300">2. Select Quiz</h2>
+            <h2 class="text-xl font-semibold mb-4 text-green-300">2. Select Quiz Parameters</h2>
             <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 mb-4">
                 <select id="domainSelect" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" disabled>
                     <option value="">-- Select Domain --</option>
@@ -92,9 +132,11 @@
                     Load Quiz
                 </button>
             </div>
+            <!-- Status message area -->
             <div id="domainOverview" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm">
-                Domain Overview: Loading...
+                Awaiting user authentication...
             </div>
+            <div id="statusMessage" class="mt-3 text-sm text-red-400 hidden"></div>
         </div>
 
         <!-- Quiz Area -->
@@ -109,7 +151,7 @@
             </div>
 
             <button type="button" onclick="submitQuiz()" id="submitQuizBtn" class="mt-8 w-full btn bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-6 rounded-lg">
-                Submit Quiz and View Score
+                Submit and View Score
             </button>
         </form>
 
@@ -127,21 +169,293 @@
 
     </div>
 
+    <!-- 3. Authentication Modal (Hidden Overlay) -->
+    <div id="authModal" class="fixed inset-0 z-50 hidden bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 overflow-y-auto">
+        <div id="authSectionContent" class="auth-modal-content card p-8 rounded-xl w-full max-w-lg relative max-h-full">
+            <h2 class="text-2xl font-semibold mb-4 text-green-300 flex justify-between items-center">
+                User Authentication
+                <button onclick="toggleAuthModal(false)" id="closeModalBtn" class="text-gray-400 hover:text-red-400 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </h2>
+
+            <div id="authForm" class="flex flex-col space-y-4">
+                
+                <!-- Email (Always Visible) -->
+                <input type="email" id="authEmail" placeholder="Email" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                
+                <!-- Register fields (Username, Address, Password, Confirm Password) -->
+                <div id="registerInputsGroup" class="flex flex-col space-y-4 hidden">
+                    <input type="text" id="authUserName" placeholder="Username (Required)" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    
+                    <input type="text" id="authAddress" placeholder="Address (Optional)" class="p-3 rounded-lg flex-grow bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    
+                    <!-- Password (In register mode, this is the main password) -->
+                    <div class="password-wrapper">
+                        <input type="password" id="authPassword" placeholder="Password" class="p-3 rounded-lg w-full bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                        <span class="password-toggle" onclick="togglePasswordVisibility('authPassword')">
+                            <svg id="authPasswordIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.277c-2.484.58-4.992 0-7.382-1.745l-1.076-1.787a.75.75 0 01-.19-.48l-.004-.32a12.01 12.01 0 0110.8-7.9c.783 0 1.543.14 2.272.417M12 12V12m0 0a3 3 0 00-3-3m3 3a3 3 0 013 3m-3-3l-.117.067a1.002 1.002 0 00-.31 1.054c.427.508 1.127.87 2.055.87M12 7.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"></path></svg>
+                        </span>
+                    </div>
+
+                    <!-- Confirm Password (Only in register mode) -->
+                    <div class="password-wrapper">
+                        <input type="password" id="authConfirmPassword" placeholder="Confirm Password" class="p-3 rounded-lg w-full bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                        <span class="password-toggle" onclick="togglePasswordVisibility('authConfirmPassword')">
+                            <svg id="authConfirmPasswordIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.277c-2.484.58-4.992 0-7.382-1.745l-1.076-1.787a.75.75 0 01-.19-.48l-.004-.32a12.01 12.01 0 0110.8-7.9c.783 0 1.543.14 2.272.417M12 12V12m0 0a3 3 0 00-3-3m3 3a3 3 0 013 3m-3-3l-.117.067a1.002 1.002 0 00-.31 1.054c.427.508 1.127.87 2.055.87M12 7.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"></path></svg>
+                        </span>
+                    </div>
+
+                </div>
+
+                <!-- Password (Only visible in Sign-in mode, hidden via JS in register mode) -->
+                <div class="password-wrapper" id="signInPasswordWrapper">
+                    <input type="password" id="authPasswordSignIn" placeholder="Password" class="p-3 rounded-lg w-full bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <span class="password-toggle" onclick="togglePasswordVisibility('authPasswordSignIn')">
+                        <svg id="authPasswordSignInIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.277c-2.484.58-4.992 0-7.382-1.745l-1.076-1.787a.75.75 0 01-.19-.48l-.004-.32a12.01 12.01 0 0110.8-7.9c.783 0 1.543.14 2.272.417M12 12V12m0 0a3 3 0 00-3-3m3 3a3 3 0 013 3m-3-3l-.117.067a1.002 1.002 0 00-.31 1.054c.427.508 1.127.87 2.055.87M12 7.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"></path></svg>
+                    </span>
+                </div>
+                
+                <!-- Mode Toggles -->
+                <div class="flex space-x-4 border-b border-gray-700 pb-4">
+                    <button type="button" id="modeSignInBtn" onclick="setAuthMode('signIn')" class="btn flex-1 text-white font-semibold py-2 px-6 rounded-lg bg-green-600">
+                        Sign In Mode
+                    </button>
+                    <button type="button" id="modeRegisterBtn" onclick="setAuthMode('register')" class="btn flex-1 text-white font-semibold py-2 px-6 rounded-lg bg-gray-700 hover:bg-blue-700">
+                        Register Mode
+                    </button>
+                </div>
+
+                <!-- Submission Button -->
+                <button type="button" id="submitAuthBtn" onclick="submitAuthForm()" class="btn w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg">
+                    Sign In
+                </button>
+            </div>
+
+            <div id="authStatusMessage" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm text-yellow-400 hidden">
+                Please sign in or register to begin.
+            </div>
+            
+            <p class="text-xs text-gray-600 mt-4 text-center">Note: Passwords are handled securely by Supabase Authentication.</p>
+        </div>
+    </div>
+
+    <!-- 4. Profile Modal (Hidden Overlay) -->
+    <div id="profileModal" class="fixed inset-0 z-50 hidden bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 overflow-y-auto profile-modal-open">
+        <div id="profileSectionContent" class="profile-modal-content card p-8 rounded-xl w-full max-w-4xl relative max-h-full">
+            <h2 class="text-2xl font-semibold mb-6 text-green-300 flex justify-between items-center border-b border-gray-700 pb-3">
+                User Profile & Quiz History
+                <button onclick="toggleProfileModal(false)" class="text-gray-400 hover:text-red-400 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </h2>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Column 1: Profile Details and Actions -->
+                <div class="lg:col-span-1 flex flex-col space-y-6">
+                    <h3 class="text-xl font-semibold text-yellow-400">Profile Details</h3>
+
+                    <!-- Profile Picture Upload -->
+                    <div class="flex flex-col items-center space-y-3 p-4 bg-gray-800 rounded-lg">
+                        <img id="profileImageDisplay" class="profile-picture w-20 h-20" src="profile.webp" onerror="this.onerror=null; this.src='profile.webp';" alt="Profile Picture">
+                        <input type="file" id="avatarFileInput" accept="image/*" class="hidden" onchange="uploadProfilePicture()">
+                        <button onclick="document.getElementById('avatarFileInput').click()" class="btn bg-gray-600 hover:bg-gray-700 text-white py-1 px-3 rounded-lg text-sm">Upload Photo</button>
+                        <p class="text-xs text-gray-500">Click avatar to upload (Max 1MB)</p>
+                    </div>
+
+                    <!-- User Details (Email - Static) -->
+                    <div class="space-y-3 p-4 bg-gray-800 rounded-lg text-sm">
+                        <label class="block font-medium text-gray-400">Email (Static)</label>
+                        <p id="profileEmailStatic" class="text-white break-words"></p>
+                    </div>
+
+                    <!-- User Details (Username & Address - Editable) -->
+                    <div class="space-y-3 p-4 bg-gray-800 rounded-lg text-sm">
+                        <label for="profileUsernameInput" class="block font-medium text-gray-400">Username</label>
+                        <input type="text" id="profileUsernameInput" placeholder="Enter Username" class="w-full p-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500">
+
+                        <label for="profileAddressInput" class="block font-medium text-gray-400 mt-4">Address</label>
+                        <input type="text" id="profileAddressInput" placeholder="Enter Address (Optional)" class="w-full p-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500">
+                    </div>
+                    
+                    <!-- Profile Action Buttons (MUST BE AT THE LAST) -->
+                    <div class="space-y-4 pt-2 mt-auto">
+                        <button onclick="saveProfileDetails()" class="btn w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md">
+                            Save Profile Details
+                        </button>
+                        <button onclick="resetPassword()" class="btn w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md">
+                            Reset Password (Send Email)
+                        </button>
+                        <button onclick="signOutUser()" class="btn w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md">
+                            Logout
+                        </button>
+                    </div>
+
+                    <div id="profileSaveStatus" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm text-yellow-400 hidden"></div>
+                </div>
+
+                <!-- Column 2 & 3: Statistics and History -->
+                <div class="lg:col-span-2 flex flex-col space-y-6">
+                    
+                    <!-- Statistics Graph -->
+                    <div class="p-4 card rounded-lg">
+                        <h3 class="text-xl font-semibold text-yellow-400 mb-3">Day-wise Score Trend</h3>
+                        <div class="h-64">
+                            <canvas id="quizStatsChart"></canvas>
+                        </div>
+                        <div id="chartLoading" class="text-center text-gray-500 mt-4">Loading stats...</div>
+                    </div>
+
+                    <!-- Recent Quiz History Table -->
+                    <div class="p-4 card rounded-lg flex-grow">
+                        <h3 class="text-xl font-semibold text-yellow-400 mb-3">Recent Quiz History</h3>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-700">
+                                <thead>
+                                    <tr>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Domain</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Difficulty</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Score</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="quizHistoryTableBody" class="bg-gray-800 divide-y divide-gray-700 text-sm">
+                                    <tr><td colspan="4" class="px-3 py-2 text-center text-gray-500">No results found or loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 5. Admin Dashboard Modal (Hidden Overlay) -->
+    <div id="adminModal" class="fixed inset-0 z-50 hidden bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 overflow-y-auto admin-modal-open">
+        <div id="adminSectionContent" class="admin-modal-content card p-8 rounded-xl w-full max-w-6xl relative max-h-full">
+            <h2 class="text-2xl font-semibold mb-6 text-red-400 flex justify-between items-center border-b border-gray-700 pb-3">
+                Admin Dashboard
+                <button onclick="toggleAdminModal(false)" class="text-gray-400 hover:text-red-400 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </h2>
+
+            <div class="space-y-6">
+                <!-- Global Stats Overview -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+                    <div class="card p-4 rounded-lg bg-gray-800">
+                        <p class="text-xs text-gray-400">Total Registered Users</p>
+                        <p id="adminTotalUsers" class="text-3xl font-bold text-green-400 mt-1">0</p>
+                    </div>
+                    <div class="card p-4 rounded-lg bg-gray-800">
+                        <p class="text-xs text-gray-400">Total Quizzes Attempted</p>
+                        <p id="adminTotalAttempts" class="text-3xl font-bold text-yellow-400 mt-1">0</p>
+                    </div>
+                    <div class="card p-4 rounded-lg bg-gray-800">
+                        <p class="text-xs text-gray-400">Total Admins</p>
+                        <p id="adminTotalAdmins" class="text-3xl font-bold text-red-400 mt-1">0</p>
+                    </div>
+                </div>
+
+                <!-- User Management Table -->
+                <div class="p-4 card rounded-lg">
+                    <h3 class="text-xl font-semibold text-red-400 mb-3">User & Role Management</h3>
+                    <div id="adminLoadingStatus" class="text-center text-gray-500 py-4">Loading user data...</div>
+                    <div class="overflow-x-auto max-h-96">
+                        <table class="min-w-full divide-y divide-gray-700">
+                            <thead>
+                                <tr>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">User/Email</th>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Username</th>
+                                    <th class="px-3 py-2 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Quizzes</th>
+                                    <th class="px-3 py-2 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Is Admin</th>
+                                    <th class="px-3 py-2 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminUserTableBody" class="bg-gray-800 divide-y divide-gray-700 text-sm">
+                                <!-- User rows populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
     <script>
-        // Set the API URL to your live Render deployment
-        const API_BASE_URL = 'https://fast-quiz-api.onrender.com';
+        // --- Supabase Configuration (INTEGRATED KEY) ---
+        const SUPABASE_PROJECT_REF = 'lmkvsumkrshpjzfqxyug';
+        const SUPABASE_URL = `https://${SUPABASE_PROJECT_REF}.supabase.co`;
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxta3ZzdW1rcnNocGp6ZnF4eXVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3MjQxNDcsImV4cCI6MjA3NTMwMDE0N30.5Mu9VHhy2Laz93lgQAKOGiIQl3J1HiZKmsj6p1jqwVA';
         
-        // --- Hardcoding the key is not strictly needed anymore, but for deployment safety ---
-        let API_KEY = ''; // We will generate a fresh key every time
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        // --- ADMIN INITIALIZATION CONSTANT ---
+        // IMPORTANT: Replace "your.admin@example.com" with your actual registered email
+        const INITIAL_ADMIN_EMAIL = "your.admin@example.com"; 
+
+        // --- Quiz API Configuration ---
+        const API_BASE_URL = 'https://fast-quiz-api.onrender.com';
+        const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=';
+
+        let QUIZ_API_KEY = ''; 
         let currentDomains = {};
         let activeQuestions = [];
         let activeQuizType = "";
+        let currentAuthToken = null;
+        let isRegisterMode = false; 
+        let chartInstance = null;
+        let isAdmin = false; // New flag for admin status
+        const DEFAULT_AVATAR_URL = 'profile.webp'; // Use the uploaded file
         const MAX_QUESTIONS = { easy: 20, medium: 10, hard: 5 };
 
         const elements = {
-            userId: document.getElementById('userId'),
-            apiKeyStatus: document.getElementById('apiKeyStatus'),
+            // Modal/Header Elements
+            authModal: document.getElementById('authModal'), 
+            profileModal: document.getElementById('profileModal'),
+            adminModal: document.getElementById('adminModal'), // New Admin Modal
+            authSectionContent: document.getElementById('authSectionContent'), 
+            profileSectionContent: document.getElementById('profileSectionContent'),
+            adminSectionContent: document.getElementById('adminSectionContent'),
+            showAuthModalBtn: document.getElementById('showAuthModalBtn'), 
+            showAdminModalBtn: document.getElementById('showAdminModalBtn'), // New Admin Button
+            userInfoHeader: document.getElementById('userInfoHeader'), 
+            profileImageCircle: document.getElementById('profileImageCircle'),
+            // Form Elements
+            authForm: document.getElementById('authForm'),
+            authEmail: document.getElementById('authEmail'),
+            authUserName: document.getElementById('authUserName'),
+            authAddress: document.getElementById('authAddress'),
+            authPassword: document.getElementById('authPassword'), // Register Password
+            authPasswordSignIn: document.getElementById('authPasswordSignIn'), // Sign-in Password
+            authConfirmPassword: document.getElementById('authConfirmPassword'),
+            registerInputsGroup: document.getElementById('registerInputsGroup'),
+            signInPasswordWrapper: document.getElementById('signInPasswordWrapper'), // New wrapper for sign-in password field
+            modeSignInBtn: document.getElementById('modeSignInBtn'),
+            modeRegisterBtn: document.getElementById('modeRegisterBtn'),
+            submitAuthBtn: document.getElementById('submitAuthBtn'),
+            // Profile Elements
+            profileImageDisplay: document.getElementById('profileImageDisplay'),
+            profileEmailStatic: document.getElementById('profileEmailStatic'),
+            profileUsernameInput: document.getElementById('profileUsernameInput'),
+            profileAddressInput: document.getElementById('profileAddressInput'),
+            avatarFileInput: document.getElementById('avatarFileInput'),
+            profileSaveStatus: document.getElementById('profileSaveStatus'),
+            quizStatsChart: document.getElementById('quizStatsChart'),
+            quizHistoryTableBody: document.getElementById('quizHistoryTableBody'),
+            chartLoading: document.getElementById('chartLoading'),
+            // Admin Elements
+            adminTotalUsers: document.getElementById('adminTotalUsers'),
+            adminTotalAttempts: document.getElementById('adminTotalAttempts'),
+            adminTotalAdmins: document.getElementById('adminTotalAdmins'),
+            adminLoadingStatus: document.getElementById('adminLoadingStatus'),
+            adminUserTableBody: document.getElementById('adminUserTableBody'),
+            // Status/Display
+            authStatusMessage: document.getElementById('authStatusMessage'),
             statusMessage: document.getElementById('statusMessage'),
+            // Quiz Elements
             domainSelect: document.getElementById('domainSelect'),
             categorySelect: document.getElementById('categorySelect'),
             loadQuestionsBtn: document.getElementById('loadQuestionsBtn'),
@@ -154,13 +468,122 @@
             scoreSummary: document.getElementById('scoreSummary'),
             resultsDetails: document.getElementById('resultsDetails')
         };
+        
+        // --- Modal Control ---
+
+        function toggleAuthModal(show, mode = 'signIn') {
+            if (show) {
+                elements.authModal.classList.remove('hidden');
+                elements.authSectionContent.classList.remove('opacity-0', 'scale-95');
+                elements.authSectionContent.classList.add('opacity-100', 'scale-100');
+                setAuthMode(mode);
+            } else {
+                elements.authSectionContent.classList.remove('opacity-100', 'scale-100');
+                elements.authSectionContent.classList.add('opacity-0', 'scale-95');
+                setTimeout(() => {
+                    elements.authModal.classList.add('hidden');
+                }, 300); 
+            }
+        }
+        
+        function toggleProfileModal(show) {
+            if (show) {
+                elements.profileModal.classList.remove('hidden');
+                elements.profileSectionContent.classList.remove('opacity-0', 'scale-95');
+                elements.profileSectionContent.classList.add('opacity-100', 'scale-100');
+                // Fetch data when modal opens
+                fetchProfileData();
+                fetchQuizStats();
+            } else {
+                elements.profileSectionContent.classList.remove('opacity-100', 'scale-100');
+                elements.profileSectionContent.classList.add('opacity-0', 'scale-95');
+                setTimeout(() => {
+                    elements.profileModal.classList.add('hidden');
+                }, 300);
+            }
+        }
+
+        function toggleAdminModal(show) {
+            if (!isAdmin) return; // Only allow admins to open
+            if (show) {
+                elements.adminModal.classList.remove('hidden');
+                elements.adminSectionContent.classList.remove('opacity-0', 'scale-95');
+                elements.adminSectionContent.classList.add('opacity-100', 'scale-100');
+                fetchAdminData();
+            } else {
+                elements.adminSectionContent.classList.remove('opacity-100', 'scale-100');
+                elements.adminSectionContent.classList.add('opacity-0', 'scale-95');
+                setTimeout(() => {
+                    elements.adminModal.classList.add('hidden');
+                }, 300);
+            }
+        }
+
+
+        // --- Password Toggle Function ---
+        function togglePasswordVisibility(id) {
+            const input = document.getElementById(id);
+            const iconId = id + 'Icon';
+            const icon = document.getElementById(iconId);
+
+            if (input.type === 'password') {
+                input.type = 'text';
+                // Change icon to eye-slash
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.277c-2.484.58-4.992 0-7.382-1.745l-1.076-1.787a.75.75 0 01-.19-.48l-.004-.32a12.01 12.01 0 0110.8-7.9c.783 0 1.543.14 2.272.417M21 21l-9-9M3.27 3.27a10.03 10.03 0 00-.783 6.7M12 12a3 3 0 11-6 0 3 3 0 016 0z"></path>';
+            } else {
+                input.type = 'password';
+                // Change icon to eye
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.277c-2.484.58-4.992 0-7.382-1.745l-1.076-1.787a.75.75 0 01-.19-.48l-.004-.32a12.01 12.01 0 0110.8-7.9c.783 0 1.543.14 2.272.417M12 12V12m0 0a3 3 0 00-3-3m3 3a3 3 0 013 3m-3-3l-.117.067a1.002 1.002 0 00-.31 1.054c.427.508 1.127.87 2.055.87M12 7.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"></path>';
+            }
+        }
+
+        // --- Authentication Mode Logic ---
+
+        function setAuthMode(mode) {
+            isRegisterMode = (mode === 'register');
+            
+            // 1. Toggle visibility of register/sign-in specific fields
+            if (isRegisterMode) {
+                elements.registerInputsGroup.classList.remove('hidden');
+                elements.signInPasswordWrapper.classList.add('hidden');
+            } else {
+                elements.registerInputsGroup.classList.add('hidden');
+                elements.signInPasswordWrapper.classList.remove('hidden');
+            }
+
+            // 2. Update button styling
+            if (isRegisterMode) {
+                elements.modeRegisterBtn.classList.add('active-mode-btn', 'bg-blue-600');
+                elements.modeRegisterBtn.classList.remove('bg-gray-700');
+                elements.modeSignInBtn.classList.remove('active-mode-btn', 'bg-green-600');
+                elements.modeSignInBtn.classList.add('bg-gray-700');
+                elements.submitAuthBtn.textContent = 'Register';
+                elements.submitAuthBtn.classList.remove('bg-green-600');
+                elements.submitAuthBtn.classList.add('bg-blue-600');
+            } else {
+                elements.modeSignInBtn.classList.add('active-mode-btn', 'bg-green-600');
+                elements.modeSignInBtn.classList.remove('bg-gray-700');
+                elements.modeRegisterBtn.classList.remove('active-mode-btn', 'bg-blue-600');
+                elements.modeRegisterBtn.classList.add('bg-gray-700');
+                elements.submitAuthBtn.textContent = 'Sign In';
+                elements.submitAuthBtn.classList.remove('bg-blue-600');
+                elements.submitAuthBtn.classList.add('bg-green-600');
+            }
+            
+            // Clear status message when switching modes
+            elements.authStatusMessage.classList.add('hidden');
+        }
+
+        function submitAuthForm() {
+            if (isRegisterMode) {
+                signUpUser();
+            } else {
+                signInUser();
+            }
+        }
 
         // --- Utility Functions ---
 
-        /**
-         * Shuffles an array (Fisher-Yates algorithm).
-         * @param {Array} array 
-         */
         function shuffleArray(array) {
             for (let i = array.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
@@ -168,108 +591,725 @@
             }
         }
 
-        /**
-         * Fetches data from the API with integrated error and auth handling.
-         */
-        async function fetchApi(endpoint, method = 'GET', body = null, requiresAuth = true) {
-            const url = API_BASE_URL + endpoint;
-            const headers = { 'Content-Type': 'application/json' };
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
 
-            if (requiresAuth && API_KEY) {
-                headers['X-API-Key'] = API_KEY;
-            } else if (requiresAuth && !API_KEY) {
-                elements.statusMessage.textContent = "Error: API Key is missing. Trying to auto-authenticate...";
-                elements.statusMessage.classList.remove('hidden');
-                return null;
+        async function fetchApiWithBackoff(url, options, maxRetries = 5) {
+            let lastError = null;
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.status === 429) { 
+                        const delayMs = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                        await delay(delayMs);
+                        continue; 
+                    }
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ detail: 'API error or malformed JSON.' }));
+                        throw new Error(`HTTP Error ${response.status}: ${errorData.detail || 'Service Error'}`);
+                    }
+                    return response;
+                } catch (e) {
+                    lastError = e;
+                    console.error(`Attempt ${attempt + 1} failed:`, e.message);
+                    if (attempt < maxRetries - 1) {
+                        const delayMs = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                        await delay(delayMs);
+                    }
+                }
             }
+            throw new Error(`Failed to fetch ${url} after ${maxRetries} attempts. Last error: ${lastError ? lastError.message : 'Unknown error.'}`);
+        }
+        
+        // --- Supabase Authentication Functions ---
+
+        async function updateAuthStatus(session) {
+            // FIX: Use optional chaining to safely check if key elements are present before proceeding.
+            if (!elements.authModal || !elements.userInfoHeader) {
+                 console.log("updateAuthStatus skipped: Elements not yet initialized.");
+                 return;
+            }
+
+            elements.authStatusMessage.classList.add('hidden');
+            
+            if (session) {
+                const user = session.user;
+                currentAuthToken = session.access_token;
+                
+                // Update header display
+                // Safely update elements that might not be visible but must be defined in 'elements'
+                elements.profileEmailStatic.textContent = user.email || 'N/A';
+                elements.showAuthModalBtn.classList.add('hidden');
+                elements.userInfoHeader.classList.remove('hidden');
+                
+                // Hide modal on successful auth (if it was open)
+                toggleAuthModal(false); 
+                
+                // Clear form inputs
+                elements.authEmail.value = '';
+                elements.authUserName.value = '';
+                elements.authAddress.value = '';
+                elements.authPassword.value = '';
+                elements.authConfirmPassword.value = '';
+                elements.authPasswordSignIn.value = '';
+
+                // Proceed to quiz setup
+                await generateQuizApiKey();
+                await loadDomains();
+                
+                // Load profile details, image, and admin status
+                await fetchProfileData(user.id, user.email);
+
+            } else {
+                isAdmin = false;
+                currentAuthToken = null;
+                QUIZ_API_KEY = '';
+                
+                // Update header display and hide admin button
+                elements.showAuthModalBtn.classList.remove('hidden');
+                elements.userInfoHeader.classList.add('hidden');
+                elements.showAdminModalBtn.classList.add('hidden');
+                
+                // Reset form state
+                setAuthMode('signIn');
+                
+                // Disable quiz selectors until authenticated
+                elements.domainSelect.disabled = true;
+                elements.categorySelect.disabled = true;
+                elements.loadQuestionsBtn.disabled = true;
+                elements.domainOverview.textContent = "Awaiting user authentication...";
+            }
+        }
+
+        async function signUpUser() {
+            const email = elements.authEmail.value.trim();
+            const username = elements.authUserName.value.trim();
+            const address = elements.authAddress.value.trim();
+            const password = elements.authPassword.value.trim();
+            const confirmPassword = elements.authConfirmPassword.value.trim();
+
+            if (!email || !username || !password || !confirmPassword) {
+                elements.authStatusMessage.textContent = "Email, Username, Password, and Confirm Password are required for registration.";
+                elements.authStatusMessage.classList.remove('hidden');
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                elements.authStatusMessage.textContent = "Passwords do not match.";
+                elements.authStatusMessage.classList.remove('hidden');
+                return;
+            }
+
+            elements.authStatusMessage.textContent = "Registering user and saving profile...";
+            elements.authStatusMessage.classList.remove('hidden');
+
+            // 1. Authenticate the user in Supabase
+            const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+            
+            if (authError) {
+                elements.authStatusMessage.textContent = `Registration failed: ${authError.message}`;
+                return;
+            }
+
+            const user = authData.user;
+            const session = authData.session; 
+            
+            if (user) {
+                // Determine if this user should be the initial admin
+                const initialAdmin = user.email === INITIAL_ADMIN_EMAIL;
+
+                // 2. Save additional profile data (Username, Address, is_admin) to the 'profiles' table
+                if (session) {
+                    const { error: profileError } = await supabase
+                        .from('profiles')
+                        .upsert([
+                            { id: user.id, username: username, address: address || null, is_admin: initialAdmin }
+                        ], { onConflict: 'id' });
+
+                    if (profileError) {
+                        console.error("Profile creation failed:", profileError);
+                        elements.authStatusMessage.textContent = `Registration successful, but profile storage failed: ${profileError.message}`;
+                        return;
+                    }
+                    elements.authStatusMessage.textContent = "Registration successful and signed in! Welcome.";
+
+                } else {
+                    // If no session is returned (e.g., email confirmation is required)
+                    elements.authStatusMessage.textContent = "Registration successful! Check your email for a confirmation link, then sign in.";
+                }
+            } else {
+                elements.authStatusMessage.textContent = "Registration process completed, but user object was not returned. Please try signing in.";
+            }
+        }
+
+        async function signInUser() {
+            const email = elements.authEmail.value.trim();
+            const password = elements.authPasswordSignIn.value.trim();
+            
+            if (!email || !password) {
+                elements.authStatusMessage.textContent = "Email and Password are required for sign-in.";
+                elements.authStatusMessage.classList.remove('hidden');
+                return;
+            }
+
+            elements.authStatusMessage.textContent = "Signing in...";
+            elements.authStatusMessage.classList.remove('hidden');
+
+            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            
+            if (error) {
+                elements.authStatusMessage.textContent = `Sign in failed: ${error.message}`;
+                elements.authStatusMessage.classList.remove('hidden');
+            } else {
+                elements.authStatusMessage.textContent = "Signed in successfully!";
+            }
+        }
+
+        async function signOutUser() {
+            const { error } = await supabase.auth.signOut();
+            if (error) {
+                elements.profileSaveStatus.textContent = `Logout failed: ${error.message}`;
+                elements.profileSaveStatus.classList.remove('hidden');
+                console.error("Sign out failed:", error);
+            } else {
+                toggleProfileModal(false);
+            }
+        }
+
+        // Initialize Supabase Auth Listener
+        supabase.auth.onAuthStateChange((event, session) => {
+            updateAuthStatus(session);
+        });
+
+
+        // --- Profile Management ---
+
+        async function fetchProfileData(userId, userEmail) {
+            const currentUserId = userId || (await supabase.auth.getSession()).data.session?.user.id;
+            if (!currentUserId) return;
+            
+            let profileData = null;
+            let error = null;
 
             try {
-                const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : null, });
-                if (response.ok) return await response.json();
-
-                const errorData = await response.json().catch(() => ({ detail: 'Unknown API error or malformed JSON response.' }));
-                const status = response.status;
+                let result = await supabase
+                    .from('profiles')
+                    .select('username, address, avatar_url, is_admin')
+                    .eq('id', currentUserId)
+                    .maybeSingle(); 
                 
-                if (status === 401) {
-                    elements.statusMessage.textContent = `Authentication Error: Key failed validation. Trying to auto-generate a new key...`;
-                    // Automatically try to generate a new key on 401
-                    await generateKey(true);
-                } else if (status === 404) {
-                     elements.statusMessage.textContent = `API Error (404): Resource not found for ${endpoint}.`;
+                profileData = result.data;
+                error = result.error;
+
+                if (error && error.code !== 'PGRST116') { // PGRST116 is 0 rows
+                    throw error;
+                }
+
+                // If no profile exists (e.g., new user before trigger runs), create a minimal one.
+                if (!profileData) {
+                    // This handles cases where RLS might prevent a full fetch or the profile hasn't been created yet.
+                    const initialAdmin = userEmail === INITIAL_ADMIN_EMAIL;
+                    const { error: insertError } = await supabase
+                        .from('profiles')
+                        .insert([{ id: currentUserId, is_admin: initialAdmin }], { onConflict: 'id' });
+                    
+                    if (insertError) {
+                         console.warn("Could not insert minimal profile:", insertError);
+                    }
+                    // Since data might be null, use defaults
+                    profileData = { username: '', address: '', avatar_url: null, is_admin: initialAdmin }; 
+                }
+
+                // Update UI and Admin Status
+                const data = profileData; 
+                const username = data.username || '';
+                const address = data.address || '';
+                const avatarUrlPath = data.avatar_url;
+                isAdmin = data.is_admin || false; // Set global admin flag
+
+                elements.profileUsernameInput.value = username;
+                elements.profileAddressInput.value = address;
+                
+                const usernameChar = (username || 'P').charAt(0).toUpperCase();
+                
+                let avatarUrl;
+                if (avatarUrlPath) {
+                    avatarUrl = getPublicImageUrl(avatarUrlPath);
                 } else {
-                    elements.statusMessage.textContent = `API Error (${status}): ${errorData.detail || 'Service returned an error.'}`;
+                    avatarUrl = DEFAULT_AVATAR_URL;
                 }
-                elements.statusMessage.classList.remove('hidden');
-                return null;
-            } catch (e) {
-                console.error("API Fetch Error:", e);
-                elements.statusMessage.textContent = `Connection Error: Cannot reach API at ${API_BASE_URL}. Ensure your server is live. (Error: ${e.message})`;
-                elements.statusMessage.classList.remove('hidden');
-                return null;
+
+                elements.profileImageDisplay.src = avatarUrl;
+                elements.profileImageCircle.style.backgroundImage = `url('${avatarUrl}')`;
+                elements.profileImageCircle.style.backgroundSize = 'cover';
+                elements.profileImageCircle.textContent = ''; // Clear text if image is used
+
+                // Show/Hide Admin Button
+                if (isAdmin) {
+                    elements.showAdminModalBtn.classList.remove('hidden');
+                } else {
+                    elements.showAdminModalBtn.classList.add('hidden');
+                }
+
+
+            } catch (err) {
+                console.error("Critical Error fetching profile data:", err);
             }
         }
 
-        function updateKeyDisplay(isGenerating = false) {
-            if (isGenerating) {
-                elements.apiKeyStatus.innerHTML = '<span class="pulse-animation">Generating Key...</span>';
-                elements.apiKeyStatus.classList.remove('text-green-400');
-                elements.apiKeyStatus.classList.add('text-red-400');
-            } else if (API_KEY) {
-                elements.apiKeyStatus.textContent = '✅ Authenticated';
-                elements.apiKeyStatus.classList.remove('text-red-400', 'pulse-animation');
-                elements.apiKeyStatus.classList.add('text-green-400');
-                // Enable controls
-                elements.domainSelect.disabled = false;
-                elements.loadQuestionsBtn.disabled = !(elements.domainSelect.value && elements.categorySelect.value);
-            } else {
-                elements.apiKeyStatus.textContent = '❌ Authentication Failed';
-                elements.apiKeyStatus.classList.add('text-red-400');
-                elements.apiKeyStatus.classList.remove('text-green-400', 'pulse-animation');
+        async function saveProfileDetails() {
+            const userId = (await supabase.auth.getSession()).data.session?.user.id;
+            const newUsername = elements.profileUsernameInput.value.trim();
+            const newAddress = elements.profileAddressInput.value.trim();
+
+            if (!userId) {
+                elements.profileSaveStatus.textContent = "Error: Not authenticated.";
+                elements.profileSaveStatus.classList.remove('hidden', 'text-green-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
+                return;
+            }
+
+            if (!newUsername) {
+                elements.profileSaveStatus.textContent = "Error: Username cannot be empty.";
+                elements.profileSaveStatus.classList.remove('hidden', 'text-green-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
+                return;
+            }
+
+            elements.profileSaveStatus.textContent = "Saving...";
+            elements.profileSaveStatus.classList.remove('hidden', 'text-red-400');
+            elements.profileSaveStatus.classList.add('text-yellow-400');
+
+            try {
+                // Fetch current avatar_url and is_admin to upsert correctly 
+                const { data: existingProfile } = await supabase.from('profiles').select('avatar_url, is_admin').eq('id', userId).maybeSingle();
+                const currentAvatarUrl = existingProfile?.avatar_url || null;
+                const currentIsAdmin = existingProfile?.is_admin || false;
+
+                const { error } = await supabase
+                    .from('profiles')
+                    .upsert({ 
+                        id: userId, 
+                        username: newUsername, 
+                        address: newAddress || null,
+                        avatar_url: currentAvatarUrl, 
+                        is_admin: currentIsAdmin
+                    }, { onConflict: 'id' });
+
+                if (error) throw error;
+
+                elements.profileSaveStatus.textContent = "Profile updated successfully!";
+                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.add('text-green-400');
+
+                // Re-fetch data to update the header username
+                fetchProfileData(userId);
+
+            } catch (error) {
+                console.error("Error saving profile:", error);
+                elements.profileSaveStatus.textContent = `Save failed: ${error.message}`;
+                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
             }
         }
 
-        // --- Core Application Logic (Auth, Domains, Loading) ---
-
-        /**
-         * Generates a new API key.
-         * @param {boolean} silent If true, suppresses success message.
-         */
-        async function generateKey(silent = false) {
-            const user = "AutoUser-" + Math.random().toString(36).substring(2, 8);
-            updateKeyDisplay(true);
+        async function uploadProfilePicture() {
+            const file = elements.avatarFileInput.files[0];
+            const userId = (await supabase.auth.getSession()).data.session?.user.id;
             
-            const data = await fetchApi(`/generate-key/?user=${user}`, 'POST', null, false);
+            if (!userId || !file) return;
 
-            if (data && data.api_key) {
-                API_KEY = data.api_key;
-                updateKeyDisplay();
-                if (!silent) {
-                    elements.statusMessage.textContent = `Success! Session key generated automatically.`;
-                    elements.statusMessage.classList.remove('hidden', 'text-red-400');
-                    elements.statusMessage.classList.add('text-green-400');
-                }
-                // Once the key is generated, proceed to load domains
-                await loadDomains();
-            } else {
-                updateKeyDisplay();
-                elements.statusMessage.textContent = `CRITICAL: Failed to auto-generate API key. Check API URL and service status.`;
-                elements.statusMessage.classList.remove('hidden', 'text-green-400');
-                elements.statusMessage.classList.add('text-red-400');
+            if (file.size > 1024 * 1024) { // 1MB limit
+                elements.profileSaveStatus.textContent = "File too large (Max 1MB).";
+                elements.profileSaveStatus.classList.remove('hidden');
+                return;
+            }
+
+            elements.profileSaveStatus.textContent = "Uploading image...";
+            elements.profileSaveStatus.classList.remove('hidden', 'text-red-400', 'text-green-400');
+            elements.profileSaveStatus.classList.add('text-yellow-400');
+
+            // Determine file extension
+            const fileExtension = file.name.split('.').pop();
+            const filePath = `${userId}/${crypto.randomUUID()}.${fileExtension}`;
+
+            try {
+                // 1. Upload to Storage
+                const { error: uploadError } = await supabase.storage
+                    .from('avatars')
+                    .upload(filePath, file, { cacheControl: '3600', upsert: false });
+
+                if (uploadError) throw uploadError;
+
+                // 2. Update profile table with the new file path
+                const { error: updateError } = await supabase
+                    .from('profiles')
+                    .upsert({ id: userId, avatar_url: filePath }, { onConflict: 'id' });
+
+                if (updateError) throw updateError;
+
+                elements.profileSaveStatus.textContent = "Profile picture uploaded!";
+                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.add('text-green-400');
+                
+                // 3. Update UI immediately
+                fetchProfileData(userId);
+
+            } catch (error) {
+                console.error("Upload error:", error);
+                elements.profileSaveStatus.textContent = `Upload failed: ${error.message}`;
+                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
             }
         }
 
-        async function loadDomains() {
-            elements.domainOverview.innerHTML = '<p class="text-center"><span class="pulse-animation">Loading domains...</span></p>';
-            elements.statusMessage.classList.add('hidden');
+        function getPublicImageUrl(filePath) {
+            return `${SUPABASE_URL}/storage/v1/object/public/avatars/${filePath}`;
+        }
+        
+        async function resetPassword() {
+            const email = elements.profileEmailStatic.textContent;
+            
+            if (!email || email === 'N/A') {
+                elements.profileSaveStatus.textContent = "Error: Cannot reset password without a valid email.";
+                elements.profileSaveStatus.classList.remove('hidden', 'text-green-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
+                return;
+            }
 
-            const data = await fetchApi('/domains/');
+            elements.profileSaveStatus.textContent = `Sending password reset link to ${email}...`;
+            elements.profileSaveStatus.classList.remove('hidden', 'text-red-400', 'text-green-400');
+            elements.profileSaveStatus.classList.add('text-yellow-400');
 
-            if (data) {
-                currentDomains = data;
-                populateDomainSelect(data);
-                displayDomainOverview(data);
+            const { error } = await supabase.auth.resetPasswordForEmail(email, {});
+
+            if (error) {
+                elements.profileSaveStatus.textContent = `Reset failed: ${error.message}`;
+                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
             } else {
-                elements.domainOverview.textContent = "Failed to load domain overview. (Check Authentication)";
+                elements.profileSaveStatus.textContent = "Password reset email sent! Check your inbox.";
+                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.add('text-green-400');
+            }
+        }
+
+        // --- Stats and History ---
+
+        async function fetchQuizStats() {
+            const userId = (await supabase.auth.getSession()).data.session?.user.id;
+            if (!userId) return;
+
+            elements.chartLoading.textContent = "Loading stats...";
+            elements.chartLoading.classList.remove('hidden');
+            
+            try {
+                const { data: results, error } = await supabase
+                    .from('quiz_results')
+                    .select('created_at, total_score, total_questions, domain, difficulty')
+                    .eq('user_id', userId)
+                    .order('created_at', { ascending: false });
+
+                if (error) throw error;
+
+                if (!results || results.length === 0) { 
+                    elements.quizHistoryTableBody.innerHTML = '<tr><td colspan="4" class="px-3 py-2 text-center text-gray-500">No quizzes attempted yet.</td></tr>';
+                    elements.chartLoading.textContent = "No data available.";
+                    renderChart([]); 
+                    return;
+                }
+
+                renderHistoryTable(results);
+                renderChart(results);
+
+            } catch (error) {
+                console.error("Error fetching quiz stats:", error);
+                elements.chartLoading.textContent = `Error loading stats: ${error.message}`;
+            } finally {
+                elements.chartLoading.classList.add('hidden');
+            }
+        }
+
+        function renderHistoryTable(results) {
+            let html = results.slice(0, 10).map(r => {
+                const date = new Date(r.created_at).toLocaleDateString();
+                const score = `${Math.round(r.total_score * r.total_questions)}/${r.total_questions}`;
+                const domain = r.domain.split('/')[0].trim();
+                return `
+                    <tr class="hover:bg-gray-700 transition-colors">
+                        <td class="px-3 py-2 whitespace-nowrap text-gray-300">${date}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">${domain}</td>
+                        <td class="px-3 py-2 whitespace-nowrap capitalize">${r.difficulty}</td>
+                        <td class="px-3 py-2 whitespace-nowrap font-bold text-green-400">${score}</td>
+                    </tr>
+                `;
+            }).join('');
+            elements.quizHistoryTableBody.innerHTML = html;
+        }
+
+        function renderChart(results) {
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+            
+            if (!Array.isArray(results) || results.length === 0) {
+                const ctx = elements.quizStatsChart.getContext('2d');
+                chartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: { labels: [], datasets: [{ label: 'Average Score (%)', data: [], borderColor: '#10b981' }] },
+                    options: { responsive: true, maintainAspectRatio: false }
+                });
+                return;
+            }
+
+
+            // Group scores by date
+            const dailyData = results.reduce((acc, result) => {
+                const date = new Date(result.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const percentage = result.total_score;
+
+                if (!acc[date]) {
+                    acc[date] = { totalScore: 0, count: 0 };
+                }
+                acc[date].totalScore += percentage;
+                acc[date].count += 1;
+                return acc;
+            }, {});
+
+            const labels = Object.keys(dailyData).sort();
+            const data = labels.map(date => (dailyData[date].totalScore / dailyData[date].count) * 100);
+
+            const ctx = elements.quizStatsChart.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Average Score (%)',
+                        data: data,
+                        borderColor: '#10b981', // green-500
+                        backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                        tension: 0.3,
+                        pointBackgroundColor: '#10b981',
+                        borderWidth: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: { display: true, text: 'Score Percentage', color: '#9ca3af' },
+                            grid: { color: '#30363d' },
+                            ticks: { color: '#d1d5db' }
+                        },
+                        x: {
+                            title: { display: true, text: 'Date', color: '#9ca3af' },
+                            grid: { color: '#30363d' },
+                            ticks: { color: '#d1d5db' }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `Avg Score: ${context.parsed.y.toFixed(1)}%`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // --- Admin Dashboard Logic ---
+
+        async function fetchAdminData() {
+            if (!isAdmin) return;
+
+            elements.adminLoadingStatus.textContent = "Fetching all user data and stats...";
+            elements.adminLoadingStatus.classList.remove('hidden');
+            elements.adminUserTableBody.innerHTML = '';
+            
+            try {
+                // Fetch All Profiles
+                // FIX: Using auth_users(email) for PostgREST compatibility
+                const { data: profiles, error: profileError } = await supabase
+                    .from('profiles')
+                    .select('id, username, is_admin, auth_users(email)') 
+                    .order('username', { ascending: true });
+
+                if (profileError) throw profileError;
+
+                // Fetch All Quiz Results
+                const { data: results, error: resultsError } = await supabase
+                    .from('quiz_results')
+                    .select('user_id')
+                    .order('created_at', { ascending: false });
+
+                if (resultsError) throw resultsError;
+                
+                // Aggregate Stats
+                const totalUsers = profiles.length;
+                const totalAdmins = profiles.filter(p => p.is_admin).length;
+                const totalAttempts = results.length;
+                
+                // Calculate attempts per user
+                const attemptsMap = results.reduce((acc, r) => {
+                    acc[r.user_id] = (acc[r.user_id] || 0) + 1;
+                    return acc;
+                }, {});
+
+                // Update Overview Stats
+                elements.adminTotalUsers.textContent = totalUsers;
+                elements.adminTotalAdmins.textContent = totalAdmins;
+                elements.adminTotalAttempts.textContent = totalAttempts;
+
+                // Render User Table
+                renderAdminUserTable(profiles, attemptsMap);
+
+            } catch (error) {
+                console.error("Error fetching admin data:", error);
+                elements.adminLoadingStatus.textContent = `Error loading data: ${error.message}`;
+            } finally {
+                elements.adminLoadingStatus.classList.add('hidden');
+            }
+        }
+
+        function renderAdminUserTable(profiles, attemptsMap) {
+            const currentUserId = supabase.auth.currentUser?.id;
+
+            const html = profiles.map(p => {
+                const email = p.auth_users?.[0]?.email || 'N/A'; // Access email from array of objects
+                const attempts = attemptsMap[p.id] || 0;
+                const isCurrentUser = p.id === currentUserId;
+                
+                // Determine button state
+                let buttonText, buttonClass, buttonAction;
+                if (isCurrentUser) {
+                    buttonText = 'Current Admin';
+                    buttonClass = 'bg-gray-500 cursor-not-allowed';
+                    buttonAction = 'return false;';
+                } else if (p.is_admin) {
+                    buttonText = 'Remove Admin';
+                    buttonClass = 'bg-red-600 hover:bg-red-700';
+                    buttonAction = `toggleAdminStatus('${p.id}', false)`;
+                } else {
+                    buttonText = 'Make Admin';
+                    buttonClass = 'bg-green-600 hover:bg-green-700';
+                    buttonAction = `toggleAdminStatus('${p.id}', true)`;
+                }
+
+                return `
+                    <tr class="hover:bg-gray-700 transition-colors">
+                        <td class="px-3 py-2 break-words">
+                            <p class="font-semibold text-gray-200">${email}</p>
+                            <p class="text-xs text-gray-500">${p.id.substring(0, 8)}...</p>
+                        </td>
+                        <td class="px-3 py-2 whitespace-nowrap">${p.username || 'No Username'}</td>
+                        <td class="px-3 py-2 text-center text-yellow-400 font-bold">${attempts}</td>
+                        <td class="px-3 py-2 text-center">
+                            <span class="inline-block px-2 py-1 text-xs font-semibold rounded-full ${p.is_admin ? 'bg-red-800 text-red-100' : 'bg-green-800 text-green-100'}">
+                                ${p.is_admin ? 'YES' : 'NO'}
+                            </span>
+                        </td>
+                        <td class="px-3 py-2 text-center whitespace-nowrap">
+                            <button onclick="${buttonAction}" class="btn text-white py-1 px-3 rounded-lg text-xs ${buttonClass}" ${isCurrentUser ? 'disabled' : ''}>
+                                ${buttonText}
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            elements.adminUserTableBody.innerHTML = html;
+        }
+
+        async function toggleAdminStatus(userId, setAdmin) {
+            elements.adminLoadingStatus.textContent = `Updating role for user ${userId.substring(0, 8)}...`;
+            elements.adminLoadingStatus.classList.remove('hidden');
+
+            try {
+                const { error } = await supabase
+                    .from('profiles')
+                    .update({ is_admin: setAdmin })
+                    .eq('id', userId);
+
+                if (error) throw error;
+                
+                elements.adminLoadingStatus.textContent = `User role updated to ${setAdmin ? 'Admin' : 'Regular User'}. Refreshing data...`;
+                
+                // Re-fetch all admin data to update the table immediately
+                await fetchAdminData();
+
+            } catch (error) {
+                console.error("Error setting admin status:", error);
+                elements.adminLoadingStatus.textContent = `Failed to update role: ${error.message}`;
+            }
+        }
+        
+        // --- Quiz API Communication and Core Logic ---
+
+        async function fetchQuizApi(endpoint, method = 'GET', body = null, requiresAuth = true, retryOnAuth = true) {
+            const url = API_BASE_URL + endpoint;
+            const headers = { 'Content-Type': 'application/json' };
+            if (requiresAuth && QUIZ_API_KEY) { headers['X-API-Key'] = QUIZ_API_KEY; } else if (requiresAuth && !QUIZ_API_KEY) { elements.domainOverview.textContent = "Quiz API Key not generated. Please sign in."; return null; }
+            try {
+                const response = await fetchApiWithBackoff(url, { method, headers, body: body ? JSON.stringify(body) : null, }, 5);
+                return await response.json();
+            } catch (e) {
+                console.error("Quiz API Fetch Error:", e);
+                elements.statusMessage.textContent = `Connection Error: Cannot reach Quiz API at ${API_BASE_URL}. (Error: ${e.message})`;
+                elements.statusMessage.classList.remove('hidden');
+                if (e.message.includes('401') && retryOnAuth) {
+                    const newKeyGenerated = await generateQuizApiKey(true);
+                    if (newKeyGenerated) { elements.statusMessage.textContent = `Retrying request with new quiz key...`; return await fetchQuizApi(endpoint, method, body, requiresAuth, false); }
+                    return null;
+                }
+                return null;
+            }
+        }
+        async function generateQuizApiKey(silent = false) {
+            const user = (await supabase.auth.getSession()).data.session?.user.id || "GuestUser";
+            if (!silent) { elements.domainOverview.innerHTML = `<p class="text-center text-yellow-400"><span class="pulse-animation">Generating Quiz API Key... (External service may take a moment to start up)</span></p>`; }
+            const url = API_BASE_URL + `/generate-key/?user=${user}`;
+            try {
+                const response = await fetchApiWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, 5);
+                const data = await response.json();
+                if (data && data.api_key) {
+                    QUIZ_API_KEY = data.api_key;
+                    elements.domainOverview.innerHTML = `<p class="text-center text-green-400">Quiz API Key successful. Loading quiz data...</p>`;
+                    elements.statusMessage.classList.add('hidden');
+                    return true; 
+                }
+            } catch (e) {
+                elements.domainOverview.innerHTML = `<p class="text-center text-red-400">CRITICAL: Failed to connect to Quiz API and generate key.</p>`;
+                console.error("Key Generation Failed:", e);
+                return false; 
+            }
+        }
+        async function loadDomains() {
+            elements.domainOverview.innerHTML = '<p class="text-center"><span class="pulse-animation">Fetching domain list...</span></p>';
+            elements.statusMessage.classList.add('hidden');
+            let data = null;
+            data = await fetchQuizApi('/domains/', 'GET', null, true, false); 
+            
+            if (data) {
+                const filteredDomains = {};
+                for (const domainKey in data) { 
+                    // Filter out DBMS if needed, but keeping all domains returned for robustness
+                    filteredDomains[domainKey] = data[domainKey]; 
+                }
+                currentDomains = filteredDomains;
+                populateDomainSelect(filteredDomains);
+                elements.domainOverview.textContent = "Domains loaded successfully. Select a quiz category above.";
+                elements.loadQuestionsBtn.disabled = false;
+            } else {
+                elements.domainOverview.textContent = "Failed to load domain list. Is the Quiz API server running and accessible?";
+                elements.loadQuestionsBtn.disabled = true;
             }
         }
 
@@ -281,270 +1321,345 @@
                 option.textContent = domain;
                 elements.domainSelect.appendChild(option);
             }
+            elements.domainSelect.disabled = false;
         }
-
-        function displayDomainOverview(data) {
-            let html = '<table class="w-full text-left">';
-            html += '<thead><tr class="text-green-300 border-b border-gray-700"><th>Domain</th><th>Easy (MCQ)</th><th>Medium (Descriptive)</th><th>Hard (Descriptive)</th></tr></thead>';
-            html += '<tbody>';
-            
-            for (const domain in data) {
-                const counts = data[domain];
-                html += `<tr class="border-b border-gray-700 hover:bg-gray-700/50">
-                            <td class="py-2 font-semibold">${domain}</td>
-                            <td>${counts.easy || 0}</td>
-                            <td>${counts.medium || 0}</td>
-                            <td>${counts.hard || 0}</td>
-                        </tr>`;
-            }
-
-            html += '</tbody></table>';
-            elements.domainOverview.innerHTML = html;
-        }
-
         function handleDomainChange() {
             const domain = elements.domainSelect.value;
             elements.categorySelect.innerHTML = '<option value="">-- Select Difficulty --</option>';
             elements.categorySelect.disabled = true;
             elements.loadQuestionsBtn.disabled = true;
-
             if (domain && currentDomains[domain]) {
-                const categories = currentDomains[domain];
-                for (const category in categories) {
-                    const maxQs = MAX_QUESTIONS[category] || categories[category];
-                    const option = document.createElement('option');
-                    option.value = category;
-                    option.textContent = `${category.charAt(0).toUpperCase() + category.slice(1)} (Will load ${maxQs} Qs)`;
-                    elements.categorySelect.appendChild(option);
-                }
+                // Only populate Easy, Medium, Hard
+                ['easy', 'medium', 'hard'].forEach(category => {
+                    if (MAX_QUESTIONS[category]) {
+                        const maxQs = MAX_QUESTIONS[category];
+                        const option = document.createElement('option');
+                        option.value = category;
+                        option.textContent = `${category.charAt(0).toUpperCase() + category.slice(1)} ( ${maxQs} Qs)`;
+                        elements.categorySelect.appendChild(option);
+                    }
+                });
                 elements.categorySelect.disabled = false;
             }
+            handleCategoryChange();
         }
-        
         function handleCategoryChange() {
-            elements.loadQuestionsBtn.disabled = !(elements.domainSelect.value && elements.categorySelect.value);
+            elements.loadQuestionsBtn.disabled = !(elements.domainSelect.value && elements.categorySelect.value && QUIZ_API_KEY);
         }
-
         async function loadQuestions() {
             elements.statusMessage.classList.add('hidden');
-            const domain = elements.domainSelect.value;
+            let domain = elements.domainSelect.value; 
             const category = elements.categorySelect.value;
             const maxQs = MAX_QUESTIONS[category];
-
             if (!domain || !category) {
                 elements.statusMessage.textContent = "Please select both a Domain and a Difficulty.";
                 elements.statusMessage.classList.remove('hidden');
                 return;
             }
             
-            elements.questionContainer.innerHTML = '<p class="text-center"><span class="pulse-animation">Fetching all questions...</span></p>';
-            elements.loadQuestionsBtn.disabled = true;
+            // Standardize domain name formatting for API call
+            if (domain.toUpperCase() === "DBMS" || domain.toLowerCase() === "c++") {
+                domain = domain.toUpperCase() === "DBMS" ? "DBMS" : "C++";
+            } else {
+                domain = domain.charAt(0).toUpperCase() + domain.slice(1).toLowerCase();
+            }
 
-            const data = await fetchApi(`/get-questions/${domain}/${category}`);
+            elements.questionContainer.innerHTML = `<p class="text-center"><span class="pulse-animation">Fetching questions for ${domain}/${category}...</span></p>`;
+            elements.loadQuestionsBtn.disabled = true;
+            let data = await fetchQuizApi(`/get-questions/${domain}/${category}`, 'GET', null, true, false); 
 
             if (data && data.questions) {
-                // 1. Shuffle all questions fetched
                 shuffleArray(data.questions);
-
-                // 2. Select the required subset (e.g., 20, 10, or 5)
                 activeQuestions = data.questions.slice(0, maxQs);
                 activeQuizType = data.type;
-
                 renderQuiz(domain, category, activeQuestions, activeQuizType);
             } else if (data) {
                  elements.questionContainer.innerHTML = '<p class="text-red-400">Received data but no questions found.</p>';
+            } else {
+                 elements.questionContainer.innerHTML = `<p class="text-red-400">Failed to load quiz. The selected quiz might not exist or the API is unavailable.</p>`;
             }
-
             elements.loadQuestionsBtn.disabled = false;
         }
-
-        // --- Rendering the Quiz (Input Form) ---
-
         function renderQuiz(domain, category, questions, type) {
             elements.resultsContainer.classList.add('hidden');
             elements.quizForm.classList.remove('hidden');
             elements.quizTitle.textContent = `${domain} / ${category.toUpperCase()} (${type})`;
             elements.quizTotalQs.textContent = questions.length;
-
+            elements.domainOverview.classList.add('hidden'); 
             let html = '';
-
             questions.forEach((q, index) => {
                 const qNum = index + 1;
                 html += `<div class="p-4 card rounded-lg shadow-md">`;
+                const questionText = q.question || q;
                 
                 if (type === "MCQ") {
-                    const questionText = q.question || q;
-                    // For legacy Python MCQs (string format): extract question and options
-                    let currentQuestion = questionText;
-                    let currentOptions = q.options || [];
-                    let isLegacy = false;
-
-                    if (!q.options && typeof q === 'string') {
-                        isLegacy = true;
-                        // Regex to split question text from options (a)...(b)...
-                        const match = questionText.match(/(.*)\s+\((a)\)/i);
-                        if (match) {
-                            currentQuestion = match[1].trim();
-                            // FIX: Corrected regex for splitting options
-                            const optionsString = questionText.substring(match[1].length).trim();
-                            currentOptions = optionsString.split(/\s*(?=\([a-d]\))/).map(s => s.trim()).filter(s => s);
-                        } else {
-                            currentQuestion = questionText;
-                        }
-                    }
-
-                    html += `<p class="font-semibold text-base mb-2">Q${qNum}: ${currentQuestion.replace('✅', '').trim()}</p>`;
-                    
+                    const currentOptions = q.options || [];
+                    html += `<p class="font-semibold text-base mb-2">Q${qNum}: ${questionText.trim()}</p>`;
                     html += '<ul class="list-none ml-4 space-y-2 mt-3 text-gray-300">';
                     currentOptions.forEach((option, optIndex) => {
-                        const optionValue = option.replace(/^\((.)\)\s*/, '$1').trim();
-                        const optionLetter = option.match(/^\((.)\)/) ? option.match(/^\((.)\)/)[1] : String.fromCharCode(97 + optIndex);
-                        
+                        const optionLetter = String.fromCharCode(97 + optIndex);
                         html += `<li>
-                                    <label class="inline-flex items-center space-x-2">
-                                        <input type="radio" 
-                                               name="question_${index}" 
-                                               value="${optionValue}" 
-                                               data-option-letter="${optionLetter}"
-                                               class="form-radio h-4 w-4 text-green-600 bg-gray-600 border-gray-500 focus:ring-green-500">
-                                        <span>${option}</span>
-                                    </label>
-                                </li>`;
+                                        <label class="inline-flex items-center space-x-2">
+                                            <input type="radio" 
+                                                   name="question_${index}" 
+                                                   value="${option.trim()}" 
+                                                   data-option-letter="${optionLetter}"
+                                                   class="form-radio h-4 w-4 text-green-600 bg-gray-600 border-gray-500 focus:ring-green-500">
+                                            <span>(${optionLetter}) ${option}</span>
+                                        </label>
+                                    </li>`;
                     });
                     html += '</ul>';
-
                 } else {
-                    // Handle Descriptive format
-                    html += `<p class="font-semibold text-base mb-2">Q${qNum}: ${q.question}</p>`;
+                    html += `<p class="font-semibold text-base mb-2">Q${qNum}: ${questionText.trim()}</p>`;
                     html += `<textarea name="question_${index}" 
-                                       rows="4" 
-                                       placeholder="Type your detailed answer here..." 
-                                       class="mt-2 w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"></textarea>`;
+                                        rows="4" 
+                                        placeholder="Type your detailed answer here..." 
+                                        class="mt-2 w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"></textarea>`;
                 }
-                
                 html += `</div>`;
             });
-
             elements.questionContainer.innerHTML = html;
         }
 
-
-        // --- Submission and Scoring ---
-
-        function submitQuiz() {
+        async function submitQuiz() {
             const form = document.getElementById('quizForm');
             const formData = new FormData(form);
-            let score = 0;
-            let totalPossibleScore = activeQuestions.length;
+            const totalQuestions = activeQuestions.length;
+            let descriptiveQuestionsToGrade = [];
+            let currentScore = 0;
             let resultsHtml = '';
+            const quizDomain = elements.domainSelect.value;
+            const quizDifficulty = elements.categorySelect.value;
             
-            // Hide the quiz, show the results
             elements.quizForm.classList.add('hidden');
             elements.resultsContainer.classList.remove('hidden');
-            elements.resultsDetails.innerHTML = '';
-            
-            activeQuestions.forEach((q, index) => {
-                const qNum = index + 1;
-                let isCorrect = false;
-                let userAnswer = "";
-                let originalAnswer = q.answer || q;
-                let questionText = q.question || q;
+            elements.resultsDetails.innerHTML = '<div class="text-center py-8 text-xl text-yellow-400"><span class="pulse-animation">Grading quiz and generating detailed feedback...</span></div>';
+            elements.scoreSummary.textContent = "Processing results...";
 
+            for (let index = 0; index < totalQuestions; index++) {
+                const q = activeQuestions[index];
                 const questionName = `question_${index}`;
-
+                const userAnswer = (formData.get(questionName) || "").trim();
+                const originalAnswer = (q.answer || "").toString().trim();
+                const questionText = (q.question || q).toString(); 
+                
                 if (activeQuizType === "MCQ") {
-                    userAnswer = formData.get(questionName) || "No Answer Selected";
+                    const isCorrect = (userAnswer.toLowerCase() === originalAnswer.toLowerCase());
+                    if (isCorrect) currentScore += 1;
                     
-                    // Standard MCQ (dict format)
-                    if (q.answer) {
-                        originalAnswer = q.answer.trim();
-                        isCorrect = (userAnswer.toLowerCase() === originalAnswer.toLowerCase());
-                    } else if (typeof q === 'string') {
-                        // Legacy Python MCQ (string format with ✅)
-                        const match = q.match(/\((.)\)\s*(.*?) ✅/);
-                        if (match) {
-                            originalAnswer = match[2].trim(); // The answer text
-                            const selectedElement = document.querySelector(`input[name="${questionName}"]:checked`);
-                            if(selectedElement) {
-                                // Compare the option letter or the option text
-                                const selectedOptionLetter = selectedElement.dataset.optionLetter;
-                                const answerLetterMatch = q.match(/\((.)\) .*? ✅/);
+                    resultsHtml += renderResultItem({
+                        qNum: index + 1,
+                        isCorrect: isCorrect,
+                        questionText: questionText,
+                        userAnswer: userAnswer,
+                        originalAnswer: originalAnswer,
+                        feedback: 'N/A'
+                    });
+                } else {
+                    // Descriptive: Prepare for LLM Grading
+                    descriptiveQuestionsToGrade.push({ index, questionText, userAnswer, originalAnswer });
+                    
+                    // Add placeholder to results
+                    resultsHtml += renderResultItem({
+                        qNum: index + 1,
+                        isCorrect: false, // Assume false until graded
+                        questionText: questionText,
+                        userAnswer: userAnswer,
+                        originalAnswer: originalAnswer,
+                        feedback: 'Grading with AI...'
+                    }, true);
+                }
+            }
+            
+            elements.resultsDetails.innerHTML = resultsHtml;
+            
+            // --- LLM Grading for Descriptive Answers ---
+            if (descriptiveQuestionsToGrade.length > 0) {
+                const gradingPayload = descriptiveQuestionsToGrade.map(q => ({
+                    question: q.questionText,
+                    expectedAnswer: q.originalAnswer,
+                    userAnswer: q.userAnswer
+                }));
+                
+                // Assign a temporary index for tracking the original position in descriptiveQuestionsToGrade
+                const questionsWithTempIndex = descriptiveQuestionsToGrade.map((q, idx) => ({ ...q, tempIndex: idx }));
 
-                                if (answerLetterMatch) {
-                                    const correctLetter = answerLetterMatch[1].toLowerCase();
-                                    isCorrect = (selectedOptionLetter.toLowerCase() === correctLetter);
-                                }
-                                // Fallback: compare the selected text
-                                if (!isCorrect) {
-                                     isCorrect = (userAnswer.toLowerCase() === originalAnswer.toLowerCase());
-                                }
-                            }
+                const gradedResults = await gradeDescriptiveAnswers(gradingPayload.map((q, idx) => ({ ...q, index: idx })));
+                
+                if (gradedResults) {
+                    for (const result of gradedResults) {
+                        const tempIndex = result.index; // The index returned by the LLM is the index in the 'descriptiveQuestionsToGrade' array.
+                        const qIndex = questionsWithTempIndex[tempIndex].index; // The original index in the 'activeQuestions' array.
+
+                        const isCorrect = result.score === 1; // Assuming 1 is full correct
+                        if (isCorrect) currentScore += 1;
+                        
+                        const updatedHtml = renderResultItem({
+                            qNum: qIndex + 1,
+                            isCorrect: isCorrect,
+                            questionText: questionsWithTempIndex[tempIndex].questionText,
+                            userAnswer: questionsWithTempIndex[tempIndex].userAnswer,
+                            originalAnswer: questionsWithTempIndex[tempIndex].originalAnswer,
+                            feedback: result.reasoning || "Grading completed."
+                        });
+                        
+                        // Replace the placeholder element
+                        const placeholderId = `result-placeholder-${qIndex + 1}`;
+                        const placeholderElement = document.getElementById(placeholderId);
+                        if (placeholderElement) {
+                            placeholderElement.outerHTML = updatedHtml;
+                        } else {
+                            console.error(`Could not find placeholder ${placeholderId} to replace.`);
                         }
                     }
-
                 } else {
-                    // Descriptive Type (medium/hard)
-                    userAnswer = formData.get(questionName).trim();
-                    originalAnswer = q.answer.trim();
-                    
-                    // Simple credit logic for descriptive (for this exercise, assume correct if answer is not empty)
-                    isCorrect = userAnswer.length > 5; // Placeholder for subjective scoring
+                    // Fallback scoring for descriptive if LLM failed
+                    descriptiveQuestionsToGrade.forEach(q => {
+                        // Simple fallback: grant credit if the answer is long enough (10 chars)
+                        const isCorrect = q.userAnswer.length > 10; 
+                        if (isCorrect) currentScore += 1;
 
-                    if (isCorrect) {
-                        // Descriptive questions are given credit if they show effort
-                        score += 1;
-                    }
-                    totalPossibleScore = activeQuestions.length; // Max score equals number of questions
+                        const updatedHtml = renderResultItem({
+                            qNum: q.index + 1,
+                            isCorrect: isCorrect,
+                            questionText: q.questionText,
+                            userAnswer: q.userAnswer,
+                            originalAnswer: q.originalAnswer,
+                            feedback: 'AI Grading failed. Partial credit granted if answer > 10 characters.'
+                        });
+                        const placeholderId = `result-placeholder-${q.index + 1}`;
+                        document.getElementById(placeholderId).outerHTML = updatedHtml;
+                    });
                 }
+            }
 
-                if (isCorrect && activeQuizType === "MCQ") {
-                    score += 1;
-                }
-                
-                // --- Results Rendering ---
-
-                const cardClass = isCorrect ? 'result-correct' : 'result-incorrect';
-                const icon = isCorrect ? '✅ Correct' : '❌ Incorrect / Partial Credit';
-                const iconColor = isCorrect ? 'text-green-400' : 'text-red-440';
-                
-                resultsHtml += `<div class="p-4 card rounded-lg shadow-md ${cardClass}">
-                                    <p class="font-bold text-lg ${iconColor}">${icon} (Q${qNum})</p>
-                                    <p class="font-semibold text-base mt-2">${questionText.replace('✅', '').trim()}</p>
-                                    
-                                    <div class="mt-4 p-3 bg-gray-800 rounded-lg text-sm space-y-2">
-                                        <p class="font-bold text-gray-400">Your Answer:</p>
-                                        <pre class="whitespace-pre-wrap text-white">${userAnswer || 'N/A'}</pre>
-                                    </div>
-
-                                    <div class="mt-2 p-3 bg-gray-800 rounded-lg text-sm space-y-2">
-                                        <p class="font-bold text-green-400">Original Answer:</p>
-                                        <pre class="whitespace-pre-wrap">${originalAnswer}</pre>
-                                    </div>
-                                </div>`;
-            });
+            // --- Final Score Display and Save ---
+            const scorePercentage = currentScore / totalQuestions;
+            elements.scoreSummary.innerHTML = `You scored: <span class="text-yellow-400">${currentScore}</span> out of <span class="text-yellow-400">${totalQuestions}</span>.`;
             
-            // Update Summary
-            elements.resultsDetails.innerHTML = resultsHtml;
-            elements.scoreSummary.innerHTML = `You scored: <span class="text-yellow-400">${score}</span> out of <span class="text-yellow-400">${totalPossibleScore}</span>.`;
-            elements.scoreSummary.innerHTML += `<p class="text-sm text-gray-400 mt-2">*(For Descriptive questions, credit is given if your answer is greater than 5 characters long.)</p>`;
+            // Save result to Supabase
+            await saveQuizResult(currentScore, totalQs, scorePercentage, quizDomain, quizDifficulty);
 
-            // Scroll to top of results
             elements.resultsContainer.scrollIntoView({ behavior: 'smooth' });
         }
+        
+        function renderResultItem(item, isPlaceholder = false) {
+            const { qNum, isCorrect, questionText, userAnswer, originalAnswer, feedback } = item;
+            const cardClass = isCorrect ? 'result-correct' : 'result-incorrect';
+            const icon = isCorrect ? ' Correct' : ' Incorrect / Partial Credit';
+            const iconColor = isCorrect ? 'text-green-400' : 'text-red-400';
+            const placeholderId = `result-placeholder-${qNum}`;
 
+            const baseHtml = `
+                <p class="font-bold text-lg ${iconColor}">${icon} (Q${qNum})</p>
+                <p class="font-semibold text-base mt-2">${questionText.trim()}</p>
+                
+                <div class="mt-4 p-3 bg-gray-800 rounded-lg text-sm space-y-2">
+                    <p class="font-bold text-gray-400">Your Answer:</p>
+                    <pre class="whitespace-pre-wrap text-white">${userAnswer || 'N/A'}</pre>
+                </div>
+
+                <div class="mt-2 p-3 bg-gray-800 rounded-lg text-sm space-y-2">
+                    <p class="font-bold text-green-400">Correct Answer:</p>
+                    <pre class="whitespace-pre-wrap text-green-300">${originalAnswer}</pre>
+                </div>
+                
+                <div class="mt-2 p-3 bg-gray-800 rounded-lg text-sm space-y-2">
+                    <p class="font-bold text-yellow-400">AI Feedback:</p>
+                    <pre class="whitespace-pre-wrap text-gray-300">${feedback}</pre>
+                </div>
+            `;
+            
+            if (isPlaceholder) {
+                return `<div id="${placeholderId}" class="p-4 card rounded-lg shadow-md result-incorrect pulse-animation">${baseHtml}</div>`;
+            } else {
+                return `<div class="p-4 card rounded-lg shadow-md ${cardClass}">${baseHtml}</div>`;
+            }
+        }
+        
+        async function gradeDescriptiveAnswers(questions) {
+            const systemPrompt = "You are an expert technical quiz grader. You must grade a user's answer against the expected answer. Your score should be 1.0 (Correct) or 0.0 (Incorrect). Provide a concise reasoning for the score. Do not use any introductory sentences. The 'index' field in the output must match the 'index' field in the input.";
+            const userQuery = JSON.stringify(questions);
+            const apiKey = ""; 
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                "index": { "type": "NUMBER", "description": "The index of the question in the input array. MUST be used as-is." },
+                                "score": { "type": "NUMBER", "description": "1.0 if correct, 0.0 if incorrect." },
+                                "reasoning": { "type": "STRING" }
+                            },
+                            "propertyOrdering": ["index", "score", "reasoning"]
+                        }
+                    }
+                }
+            };
+
+            try {
+                const response = await fetchApiWithBackoff(GEMINI_API_URL + apiKey, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!jsonText) throw new Error("LLM returned no JSON content.");
+                
+                // The JSON is wrapped in ```json ... ``` by the model sometimes, need to clean it
+                const cleanedJsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+
+                return JSON.parse(cleanedJsonText);
+            } catch (e) {
+                console.error("LLM Grading API Failed:", e);
+                return null;
+            }
+        }
+        
+        async function saveQuizResult(score, totalQs, scorePercentage, domain, difficulty) {
+            const userId = (await supabase.auth.getSession()).data.session?.user.id;
+            if (!userId) {
+                console.warn("User not logged in, skipping result save in production.");
+                return;
+            }
+
+            try {
+                const { error } = await supabase
+                    .from('quiz_results')
+                    .insert([
+                        { 
+                            user_id: userId,
+                            domain: domain,
+                            difficulty: difficulty,
+                            total_score: scorePercentage, // Stored as normalized 0.0 to 1.0
+                            total_questions: totalQs
+                        }
+                    ]);
+
+                if (error) throw error;
+                console.log("Quiz result saved successfully!");
+
+            } catch (error) {
+                console.error("Error saving quiz result:", error);
+            }
+        }
 
         // --- Initialization ---
 
-        function init() {
-            // Initiate the key generation process immediately
-            generateKey();
-
-            // Event Listeners
+        window.onload = function() {
+            // Initial UI Setup (Handled by onAuthStateChange after Supabase loads)
             elements.domainSelect.addEventListener('change', handleDomainChange);
             elements.categorySelect.addEventListener('change', handleCategoryChange);
-        }
-
-        window.onload = init;
+            setAuthMode('signIn');
+        };
     </script>
 </body>
 </html>
