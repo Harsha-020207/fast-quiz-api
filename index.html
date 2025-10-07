@@ -11,7 +11,7 @@
     <!-- Load Chart.js for statistics graph -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
     <style>
-        @import url('https://fonts.fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {
             font-family: 'Inter', sans-serif;
             background-color: #0d1117; /* Dark background */
@@ -394,7 +394,7 @@
         // --- Supabase Configuration (INTEGRATED KEY) ---
         const SUPABASE_PROJECT_REF = 'lmkvsumkrshpjzfqxyug';
         const SUPABASE_URL = `https://${SUPABASE_PROJECT_REF}.supabase.co`;
-        // CORRECTED KEY: Reverting to a known-good key structure
+        // PUBLIC ANON KEY (Ensure this is the correct 'anon' role key from your Supabase dashboard)
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxta3ZzdW1rcnNocGp6ZnF4eXVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3MjQxNDcsImV4cCI6MjA3NTMwMDE0N30.5Mu9VHhy2Laz93lgQAKOGiIQl3J1HiZKmsj6p1jqwVA';
         
         const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -522,8 +522,8 @@
         async function toggleProfileModal(show) {
             toggleModal(elements.profileModal, show);
             if (show) {
-                fetchProfileData();
-                await loadAndRenderProfileStats(); // NEW: Call wrapper function
+                // Ensure the chart loads after the modal is visible
+                await loadAndRenderProfileStats(); 
             }
         }
         
@@ -603,6 +603,8 @@
                     }
                     if (!response.ok) {
                         const errorData = await response.json().catch(() => ({ detail: 'API error or malformed JSON.' }));
+                        // Log detailed API error for RLS/Auth diagnosis
+                        console.error(`Fetch attempt ${attempt + 1} failed with status ${response.status}:`, errorData); 
                         throw new Error(`HTTP Error ${response.status}: ${errorData.detail || 'Service Error'}`);
                     }
                     return response;
@@ -631,7 +633,6 @@
                 currentAuthToken = session.access_token;
                 
                 // Update header display
-                // Note: userEmailDisplay doesn't exist in the HTML, using profileEmailStatic as primary source of truth
                 elements.profileEmailStatic.textContent = user.email || 'N/A';
                 elements.showAuthModalBtn?.classList.add('hidden');
                 elements.userInfoHeader?.classList.remove('hidden');
@@ -724,12 +725,12 @@
             elements.authStatusMessage.classList.remove('hidden');
 
             // 1. Authenticate the user in Supabase
-            // ADDED: options object to force redirect back to the app's current origin (domain)
             const { data: authData, error: authError } = await supabase.auth.signUp({ 
                 email, 
                 password,
                 options: {
-                    emailRedirectTo: window.location.origin
+                    // Redirect back to the app URL after confirmation
+                    emailRedirectTo: window.location.origin 
                 }
             });
             
@@ -739,37 +740,38 @@
             }
 
             const user = authData.user;
-            const session = authData.session;
             
             if (user) {
                 // Determine if this user is the initial admin
                 const isInitialAdmin = (user.email === INITIAL_ADMIN_EMAIL);
 
-                // 2. Save additional profile data
-                if (session) {
-                    const { error: profileError } = await supabase
-                        .from('profiles')
-                        .upsert([
-                            {
-                                id: user.id,
-                                username: username,
-                                address: address || null,
-                                is_admin: isInitialAdmin, // Set admin status on creation
-                                credits: 100 // Initial credits
-                            }
-                        ], { onConflict: 'id' });
+                // 2. Save profile data IMMEDIATELY after user creation, regardless of session status.
+                // This relies on the final RLS INSERT fix allowing the operation.
+                const { error: profileError } = await supabase
+                    .from('profiles')
+                    .upsert([
+                        {
+                            id: user.id,
+                            username: username,
+                            address: address || null,
+                            is_admin: isInitialAdmin, // Set admin status on creation
+                            credits: 100 // Initial credits
+                        }
+                    ], { onConflict: 'id' });
 
-                    if (profileError) {
-                        console.error("Profile creation failed:", profileError);
-                        elements.authStatusMessage.textContent = `Registration successful, but profile storage failed: ${profileError.message}`;
-                        return;
-                    }
+                if (profileError) {
+                    console.error("Profile creation failed with RLS/DB Error:", profileError);
+                    elements.authStatusMessage.textContent = `Registration successful, but profile storage failed: new row violates row-level security policy for table "profiles". Check console for RLS error.`;
+                    return;
+                }
+                
+                // 3. Update status based on whether a session was returned (i.e., confirmation required or not)
+                if (authData.session) {
                     elements.authStatusMessage.textContent = "Registration successful and signed in! Welcome.";
-
                 } else {
-                    // If no session is returned (e.g., email confirmation is required)
                     elements.authStatusMessage.textContent = "Registration successful! Check your email for a confirmation link, then sign in.";
                 }
+
             } else {
                 elements.authStatusMessage.textContent = "Registration process completed, but user object was not returned. Please try signing in.";
             }
@@ -796,6 +798,7 @@
                 elements.authStatusMessage.classList.remove('hidden');
             } else {
                 elements.authStatusMessage.textContent = "Signed in successfully!";
+                // updateAuthStatus is automatically called by the listener after successful sign-in
             }
         }
 
@@ -803,7 +806,8 @@
             const { error } = await supabase.auth.signOut();
             if (error) {
                 elements.profileSaveStatus.textContent = `Logout failed: ${error.message}`;
-                elements.profileSaveStatus.classList.remove('hidden');
+                elements.profileSaveStatus.classList.remove('hidden', 'text-green-400');
+                elements.profileSaveStatus.classList.add('text-red-400');
                 console.error("Sign out failed:", error);
             } else {
                 toggleProfileModal(false);
@@ -818,15 +822,23 @@
 
         // --- Profile Management ---
 
-        async function fetchProfileData(userId) {
-            const currentUserId = userId || (await supabase.auth.getSession()).data.session?.user.id;
-            if (!currentUserId) return;
+        async function fetchProfileData(userId = null) {
+            const currentSession = await supabase.auth.getSession();
+            const currentUserId = userId || currentSession.data.session?.user.id;
+            
+            if (!currentUserId) {
+                // Clear profile fields if not authenticated
+                elements.profileUsernameInput.value = '';
+                elements.profileAddressInput.value = '';
+                elements.profileCreditsStatic.textContent = '0';
+                return;
+            }
             
             let profileData = null;
             let error = null;
 
             try {
-                // 1. Try to fetch all fields including the new ones (is_admin, credits)
+                // Fetch the full profile data
                 let result = await supabase
                     .from('profiles')
                     .select('username, address, avatar_url, is_admin, credits')
@@ -836,20 +848,7 @@
                 profileData = result.data;
                 error = result.error;
 
-                // 2. Fallback query if schema is missing new columns (error 42703)
-                if (error && error.code === '42703') {
-                    console.warn("Schema warning: Missing 'is_admin' or 'credits'. Using fallback query.");
-                    let fallbackResult = await supabase
-                        .from('profiles')
-                        .select('username, address, avatar_url')
-                        .eq('id', currentUserId)
-                        .maybeSingle();
-                    
-                    profileData = fallbackResult.data;
-                    error = fallbackResult.error;
-                }
-
-                if (error && error.code !== 'PGRST116') { // PGRST116 is 0 rows
+                if (error && error.code !== 'PGRST116') { // PGRST116 is '0 rows found' - which is fine if profile hasn't been created yet
                     throw error;
                 }
 
@@ -863,46 +862,38 @@
                 isAdmin = data.is_admin === true;
                 if (elements.showAdminModalBtn) {
                      isAdmin
-                        ? elements.showAdminModalBtn.classList.remove('hidden')
-                        : elements.showAdminModalBtn.classList.add('hidden');
+                         ? elements.showAdminModalBtn.classList.remove('hidden')
+                         : elements.showAdminModalBtn.classList.add('hidden');
                 }
                 
                 // Update Credits
-                if (elements.profileCreditsStatic) {
-                    elements.profileCreditsStatic.textContent = data.credits !== undefined ? data.credits.toLocaleString() : 'N/A (Missing DB column)';
-                }
+                elements.profileCreditsStatic.textContent = data.credits !== undefined ? data.credits.toLocaleString() : '100';
 
 
                 elements.profileUsernameInput.value = username;
                 elements.profileAddressInput.value = address;
                 
-                const usernameChar = (username || (currentUserId ? 'U' : 'P')).charAt(0).toUpperCase();
-                
-                let avatarUrl;
+                // Set profile image
+                let avatarUrl = `./profile.webp`;
                 if (avatarUrlPath) {
                     avatarUrl = getPublicImageUrl(avatarUrlPath);
-                } else {
-                    avatarUrl = `https://placehold.co/64x64/30363d/90cdf4?text=${usernameChar}`;
                 }
 
                 elements.profileImageDisplay.src = avatarUrl;
                 elements.profileImageHeader.src = avatarUrl; // Update header image
-                elements.profileImageHeader.alt = `${usernameChar} profile`;
 
 
             } catch (err) {
                 console.error("Critical Error fetching profile data:", err);
                 // Ensure profile credits shows a safe message on error
-                if (elements.profileCreditsStatic) {
-                    elements.profileCreditsStatic.textContent = 'Error loading credits';
-                }
+                elements.profileCreditsStatic.textContent = 'Error loading credits';
             }
         }
 
         async function saveProfileDetails() {
             const userId = (await supabase.auth.getSession()).data.session?.user.id;
             const newUsername = elements.profileUsernameInput.value.trim();
-            const newAddress = elements.profileAddressInput.value.trim();
+            const newAddress = elements.profileAddressInput.value.trim(); // Corrected element reference
 
             if (!userId) {
                 elements.profileSaveStatus.textContent = "Error: Not authenticated.";
@@ -919,11 +910,11 @@
             }
 
             elements.profileSaveStatus.textContent = "Saving...";
-            elements.profileSaveStatus.classList.remove('hidden', 'text-red-400');
+            elements.profileSaveStatus.classList.remove('hidden', 'text-red-400', 'text-green-400');
             elements.profileSaveStatus.classList.add('text-yellow-400');
 
             try {
-                // Fetch current avatar_url, credits, and is_admin to upsert correctly
+                // Fetch current avatar_url, credits, and is_admin to upsert correctly (preserving existing values)
                 const { data: existingProfile } = await supabase.from('profiles').select('avatar_url, credits, is_admin').eq('id', userId).maybeSingle();
                 
                 const currentAvatarUrl = existingProfile?.avatar_url || null;
@@ -945,7 +936,7 @@
                 if (error) throw error;
 
                 elements.profileSaveStatus.textContent = "Profile updated successfully!";
-                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.remove('text-yellow-400', 'text-red-400');
                 elements.profileSaveStatus.classList.add('text-green-400');
 
                 // Re-fetch data to update the header username
@@ -954,7 +945,7 @@
             } catch (error) {
                 console.error("Error saving profile:", error);
                 elements.profileSaveStatus.textContent = `Save failed: ${error.message}`;
-                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.remove('text-yellow-400', 'text-green-400');
                 elements.profileSaveStatus.classList.add('text-red-400');
             }
         }
@@ -995,7 +986,7 @@
                 if (updateError) throw updateError;
 
                 elements.profileSaveStatus.textContent = "Profile picture uploaded!";
-                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.remove('text-yellow-400', 'text-red-400');
                 elements.profileSaveStatus.classList.add('text-green-400');
                 
                 // 3. Update UI immediately
@@ -1004,12 +995,13 @@
             } catch (error) {
                 console.error("Upload error:", error);
                 elements.profileSaveStatus.textContent = `Upload failed: ${error.message}`;
-                elements.profileSaveStatus.classList.remove('text-yellow-400');
+                elements.profileSaveStatus.classList.remove('text-yellow-400', 'text-green-400');
                 elements.profileSaveStatus.classList.add('text-red-400');
             }
         }
 
         function getPublicImageUrl(filePath) {
+            // Note: The 'avatars' storage bucket must be public or have specific RLS policies for public viewing
             return `${SUPABASE_URL}/storage/v1/object/public/avatars/${filePath}`;
         }
         
@@ -1040,16 +1032,38 @@
             }
         }
 
-        // --- Stats and History (Refactored) ---
+        // --- Stats and History ---
 
-        /**
-         * Fetches quiz results and updates the history table. Does NOT handle chart rendering or loading state.
-         * @returns {Promise<{results: Array, error: string|null}>}
-         */
+        async function loadAndRenderProfileStats() {
+            // 1. Fetch data and render table (synchronous part)
+            const results = await fetchQuizStats();
+
+            // 2. Render chart after a delay to ensure modal is fully rendered
+            if (results) {
+                // Ensure chart canvas is visible before rendering
+                const chartCanvas = document.getElementById('quizStatsChart');
+                if (chartCanvas) chartCanvas.style.display = 'block';
+
+                // Small delay to ensure browser calculates dimensions
+                setTimeout(() => {
+                    renderChart(results);
+                    elements.chartLoading.classList.add('hidden');
+                }, 100); 
+            }
+        }
+
         async function fetchQuizStats() {
             const userId = (await supabase.auth.getSession()).data.session?.user.id;
-            if (!userId) return { results: null, error: "Not Authenticated" };
+            if (!userId) {
+                 elements.quizHistoryTableBody.innerHTML = '<tr><td colspan="4" class="px-3 py-2 text-center text-red-400">Not authenticated.</td></tr>';
+                 elements.chartLoading.textContent = "Sign in to view stats.";
+                 return [];
+            }
 
+            elements.chartLoading.textContent = "Loading stats...";
+            elements.chartLoading.classList.remove('hidden');
+            elements.quizHistoryTableBody.innerHTML = '<tr><td colspan="4" class="px-3 py-2 text-center text-gray-500">Loading history...</td></tr>';
+            
             try {
                 const { data: results, error } = await supabase
                     .from('quiz_results')
@@ -1058,45 +1072,28 @@
                     .order('created_at', { ascending: false });
 
                 if (error) throw error;
-                
-                renderHistoryTable(results || []); 
-                return { results: results || [], error: null };
+
+                if (!results || results.length === 0) {
+                    elements.quizHistoryTableBody.innerHTML = '<tr><td colspan="4" class="px-3 py-2 text-center text-gray-500">No quizzes attempted yet.</td></tr>';
+                    elements.chartLoading.textContent = "No data available.";
+                    return [];
+                }
+
+                renderHistoryTable(results);
+                return results;
 
             } catch (error) {
                 console.error("Error fetching quiz stats:", error);
-                renderHistoryTable([]); // Clear history table on error
-                return { results: null, error: error.message };
+                elements.chartLoading.textContent = `Error loading stats: ${error.message}`;
+                return [];
             }
-        }
-
-        /**
-         * Wrapper to load stats, handle loading state, and render the chart with a delay.
-         */
-        async function loadAndRenderProfileStats() {
-            elements.chartLoading.textContent = "Loading stats...";
-            elements.chartLoading.classList.remove('hidden');
-            
-            const { results, error } = await fetchQuizStats();
-            
-            // Use timeout to ensure the browser has rendered the modal and the canvas element is visible
-            setTimeout(() => {
-                if (error) {
-                    elements.chartLoading.textContent = `Error loading chart data: ${error}`;
-                    renderChart([]);
-                } else if (results && results.length === 0) {
-                    elements.chartLoading.textContent = "No quiz data available to display trend.";
-                    renderChart([]);
-                } else if (results) {
-                    renderChart(results);
-                    elements.chartLoading.classList.add('hidden');
-                }
-            }, 50); // Small delay to guarantee rendering in the modal
         }
 
         function renderHistoryTable(results) {
             let html = results.slice(0, 10).map(r => {
                 const date = new Date(r.created_at).toLocaleDateString();
-                const score = `${Math.round(r.total_score * r.total_questions)}/${r.total_questions}`;
+                // total_score is 0.0 to 1.0, convert to rounded score (e.g., 8/10)
+                const score = `${Math.round(r.total_score * r.total_questions)}/${r.total_questions}`; 
                 const domain = r.domain.split('/')[0].trim();
                 return `
                     <tr class="hover:bg-gray-700 transition-colors">
@@ -1115,25 +1112,16 @@
                 chartInstance.destroy();
             }
             
-            // Check if the global Chart object exists before using it
-            if (typeof Chart === 'undefined') {
-                console.error("Chart.js library is not loaded.");
-                elements.chartLoading.textContent = "Error: Charting library failed to load.";
-                elements.chartLoading.classList.remove('hidden');
-                return;
-            }
+            const ctx = elements.quizStatsChart.getContext('2d');
 
             if (!Array.isArray(results) || results.length === 0) {
-                // Render empty chart
-                const ctx = elements.quizStatsChart.getContext('2d');
-                chartInstance = new Chart(ctx, {
+                 chartInstance = new Chart(ctx, {
                     type: 'line',
                     data: { labels: [], datasets: [{ label: 'Average Score (%)', data: [], borderColor: '#10b981' }] },
                     options: { responsive: true, maintainAspectRatio: false }
                 });
                 return;
             }
-
 
             // Group scores by date
             const dailyData = results.reduce((acc, result) => {
@@ -1148,10 +1136,10 @@
                 return acc;
             }, {});
 
-            const labels = Object.keys(dailyData).sort();
+            // Sort dates to ensure correct chart order
+            const labels = Object.keys(dailyData).sort((a, b) => new Date(a) - new Date(b));
             const data = labels.map(date => (dailyData[date].totalScore / dailyData[date].count) * 100);
 
-            const ctx = elements.quizStatsChart.getContext('2d');
             chartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -1164,6 +1152,7 @@
                         tension: 0.3,
                         pointBackgroundColor: '#10b981',
                         borderWidth: 2,
+                        fill: 'start', // Fill area under the line
                     }]
                 },
                 options: {
@@ -1266,8 +1255,8 @@
 
         async function toggleAdminStatus(targetUserId, makeAdmin) {
             const currentUserId = (await supabase.auth.getSession()).data.session?.user.id;
-            const targetUserResult = await supabase.from('profiles').select('username').eq('id', targetUserId).maybeSingle();
-            const targetUsername = targetUserResult?.data?.username || 'this user'; 
+            const { data: targetUser } = await supabase.from('profiles').select('username').eq('id', targetUserId).maybeSingle();
+            const targetEmail = targetUser?.username || 'this user'; 
 
             if (targetUserId === currentUserId) {
                 elements.adminStatusMessage.textContent = "Error: You cannot change your own admin status.";
@@ -1276,7 +1265,7 @@
                 return;
             }
 
-            elements.adminStatusMessage.textContent = `Updating status for ${targetUsername}...`;
+            elements.adminStatusMessage.textContent = `Updating status for ${targetEmail}...`;
             elements.adminStatusMessage.classList.remove('hidden', 'text-red-400', 'text-green-400');
             elements.adminStatusMessage.classList.add('text-yellow-400');
 
@@ -1407,11 +1396,13 @@
                 elements.statusMessage.classList.remove('hidden');
                 return;
             }
+            // Title case formatting logic
             if (domain.toUpperCase() === "DBMS" || domain.toLowerCase() === "c++") {
                 domain = domain.toUpperCase() === "DBMS" ? "DBMS" : "C++";
             } else {
                 domain = domain.charAt(0).toUpperCase() + domain.slice(1).toLowerCase();
             }
+
             elements.questionContainer.innerHTML = `<p class="text-center"><span class="pulse-animation">Fetching questions for ${domain}/${category}...</span></p>`;
             elements.loadQuestionsBtn.disabled = true;
             let data = await fetchQuizApi(`/get-questions/${domain}/${category}`, 'GET', null, true, false);
@@ -1447,15 +1438,15 @@
                     currentOptions.forEach((option, optIndex) => {
                         const optionLetter = String.fromCharCode(97 + optIndex);
                         html += `<li>
-                                            <label class="inline-flex items-center space-x-2">
-                                                <input type="radio"
-                                                       name="question_${index}"
-                                                       value="${option.trim()}"
-                                                       data-option-letter="${optionLetter}"
-                                                       class="form-radio h-4 w-4 text-green-600 bg-gray-600 border-gray-500 focus:ring-green-500">
-                                                <span>(${optionLetter}) ${option}</span>
-                                            </label>
-                                        </li>`;
+                                        <label class="inline-flex items-center space-x-2">
+                                            <input type="radio"
+                                                name="question_${index}"
+                                                value="${option.trim()}"
+                                                data-option-letter="${optionLetter}"
+                                                class="form-radio h-4 w-4 text-green-600 bg-gray-600 border-gray-500 focus:ring-green-500">
+                                            <span>(${optionLetter}) ${option}</span>
+                                        </label>
+                                    </li>`;
                     });
                     html += '</ul>';
                 } else {
@@ -1589,7 +1580,7 @@
                         });
                         const placeholderId = `result-placeholder-${q.index + 1}`;
                         const placeholderElement = document.getElementById(placeholderId);
-                        if (placeholderElement) {
+                        if(placeholderElement) {
                             placeholderElement.outerHTML = updatedHtml;
                         }
                     });
@@ -1597,7 +1588,7 @@
             }
 
             // --- Final Score Display and Save ---
-            const scorePercentage = totalQuestions > 0 ? currentScore / totalQuestions : 0;
+            const scorePercentage = currentScore / totalQuestions;
             elements.scoreSummary.innerHTML = `You scored: <span class="text-yellow-400">${Math.round(currentScore)}</span> out of <span class="text-yellow-400">${totalQuestions}</span>. Total Credits Earned: <span class="text-green-400">${totalCreditsEarned.toLocaleString()}</span>.`;
             
             // Save result and credits to Supabase
@@ -1699,16 +1690,19 @@
             }
 
             try {
-                // 1. Get current profile data (needed to update total credits)
+                // 1. Get current profile data (needed to update total credits safely)
                 const { data: profile, error: profileError } = await supabase
                     .from('profiles')
                     .select('credits')
                     .eq('id', userId)
                     .single();
 
-                if (profileError) throw profileError;
+                if (profileError) {
+                    // Log the profile fetch error, but don't stop save attempt immediately.
+                    console.error("Profile fetch failed during quiz save (credits update may fail):", profileError);
+                }
                 
-                const newTotalCredits = (profile.credits || 0) + totalCreditsEarned;
+                const newTotalCredits = (profile?.credits || 0) + totalCreditsEarned;
 
                 // 2. Save result
                 const { error: resultError } = await supabase
@@ -1723,7 +1717,10 @@
                         }
                     ]);
                 
-                if (resultError) throw resultError;
+                if (resultError) {
+                    console.error("Quiz result INSERT failed (likely RLS error):", resultError);
+                    throw resultError;
+                }
                 
                 // 3. Update total credits
                 const { error: creditUpdateError } = await supabase
@@ -1733,14 +1730,14 @@
 
                 if (creditUpdateError) throw creditUpdateError;
 
-                console.log("Quiz result and credits saved successfully!");
+                console.log(`Quiz result saved successfully! New credit balance: ${newTotalCredits}`);
+                
                 // Refresh profile data to update the header/modal credit count
                 fetchProfileData(userId);
 
-
             } catch (error) {
-                console.error("Error saving quiz result or updating credits:", error);
-                // In a real app, use a custom modal for this alert
+                console.error("CRITICAL: Failed to save quiz result or update credits:", error);
+                // Alert the user via console, but don't use window.alert()
             }
         }
 
@@ -1750,17 +1747,6 @@
             // Initial UI Setup (Handled by onAuthStateChange after Supabase loads)
             elements.domainSelect.addEventListener('change', handleDomainChange);
             elements.categorySelect.addEventListener('change', handleCategoryChange);
-            // Fallback for userEmailDisplay if not used in header
-            if (!document.getElementById('userEmailDisplay')) {
-                 const emailStatic = document.getElementById('profileEmailStatic');
-                 if (emailStatic) {
-                    // Create a dummy element to prevent JS error, as the original HTML used it for status
-                    const dummy = document.createElement('div');
-                    dummy.id = 'userEmailDisplay';
-                    document.body.appendChild(dummy);
-                    elements.userEmailDisplay = dummy;
-                 }
-            }
             setAuthMode('signIn');
         };
     </script>
